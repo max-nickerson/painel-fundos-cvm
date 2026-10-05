@@ -1,6 +1,17 @@
-# Painel de fundos (dados abertos CVM)
+---
+title: Painel de fundos
+emoji: 📊
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_port: 7860
+pinned: false
+short_description: Fundos brasileiros com dados abertos CVM, ANBIMA e BCB
+---
 
-Dashboard em Streamlit para analisar **qualquer fundo brasileiro** com dados públicos e gratuitos:
+# Painel de fundos (dados abertos CVM + ANBIMA + Banco Central)
+
+Página web para analisar **qualquer fundo brasileiro** com dados públicos e gratuitos. Busque por nome ou CNPJ, escolha até 8 fundos e o período.
 
 | Fonte | O que entra no painel |
 |---|---|
@@ -15,20 +26,25 @@ Abas: Visão geral · Rentabilidade · PL & captação · Alocação · Crédito
 ## Rodar no seu computador
 ```bash
 pip install -r requirements.txt
-streamlit run app.py
+uvicorn server:app --port 7860
 ```
+Abra http://localhost:7860.
 
-## Publicar de graça (Streamlit Community Cloud)
-1. Entre em https://share.streamlit.io com sua conta do GitHub.
-2. **Create app → Deploy a public app from GitHub** → repositório deste projeto, branch `main`, arquivo `app.py`.
-3. Deploy. A primeira carga de cada fundo/período baixa os arquivos da CVM (alguns minutos); depois fica em cache.
+## Publicar de graça no Hugging Face Spaces
+1. Crie uma conta em https://huggingface.co e um **New Space**: nome `painel-fundos`, SDK **Docker** (Blank), hardware **CPU basic (free)**.
+2. Em *Settings → Access Tokens* do Hugging Face, crie um token com permissão **Write**.
+3. Neste repositório do GitHub: *Settings → Secrets and variables → Actions* → crie os secrets `HF_USER` (seu usuário do Hugging Face) e `HF_TOKEN` (o token).
+4. Aba *Actions* → **Deploy no Hugging Face Space** → *Run workflow*. A partir daí, todo push no `main` atualiza o Space sozinho.
+
+O painel fica em `https://huggingface.co/spaces/<seu-usuario>/painel-fundos`. Space gratuito: 2 vCPU, 16 GB de RAM; dorme depois de um tempo sem uso (a primeira visita depois disso leva ~1 min para acordar).
 
 ## Também gera Excel
 `python lookthrough_cvm.py` → `lookthrough_cvm.xlsx` (gráficos, evolução, rentabilidade, top 10 por categoria, uma aba por fundo) + CSV.
 
-## Limites dos dados (importante)
-- Carteiras são **mensais**; meses recentes podem ter ativos **confidenciais** (até 6 meses). O painel usa o último mês "aberto" para crédito.
+## Limites dos dados
+- Carteiras são **mensais**; meses recentes podem ter ativos **confidenciais** (até 6 meses). Crédito, movimentações e marcação usam o último mês "aberto".
 - Derivativos vêm pelo valor informado (em geral nocional): ficam fora da soma de 100%.
 - Quando a carteira informada não fecha com o PL, a diferença aparece como "Ajuste carteira x PL".
-- ANBIMA gratuita guarda só ~15 dias úteis: o histórico de spread/duration cresce a partir do uso.
+- A ANBIMA gratuita guarda só ~15 dias úteis: o histórico de spread/duration cresce a partir do uso (no Space gratuito ele recomeça quando o Space reinicia).
 - Não há preço **ao vivo** gratuito de debêntures/CRI/LF (mercado de balcão); a referência pública é a taxa indicativa ANBIMA de fim de dia.
+- "Marcação (estimada)" mostra variação de preço das posições mantidas, não P&L contábil: cupons/amortizações aparecem como queda de preço.

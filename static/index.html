@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Painel de fundos</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='4' y='16' width='5' height='12' rx='1' fill='%232a78d6'/><rect x='13' y='9' width='5' height='19' rx='1' fill='%231baf7a'/><rect x='22' y='4' width='5' height='24' rx='1' fill='%23eb6834'/></svg>">
+<link rel="stylesheet" href="/static/style.css">
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
+</head>
+<body>
+<header class="topo">
+  <div>
+    <h1>Painel de fundos</h1>
+    <p class="sub">Dados abertos: CVM (carteira mensal e informe diário), ANBIMA (debêntures) e Banco Central (CDI)</p>
+  </div>
+  <button id="tema" class="icone" title="Alternar tema claro/escuro" aria-label="Alternar tema">◐</button>
+</header>
+<div class="layout">
+  <aside class="painel">
+    <label for="busca" class="rot">Adicionar fundo (nome ou CNPJ)</label>
+    <div class="busca-wrap">
+      <input id="busca" type="search" placeholder="ex.: Kinea, Sparta, 34.803.938/0001-61" autocomplete="off">
+      <ul id="sugestoes" class="sugestoes" hidden></ul>
+    </div>
+    <ul id="escolhidos" class="escolhidos"></ul>
+    <label for="desde" class="rot">Carteiras desde</label>
+    <select id="desde"></select>
+    <button id="carregar" class="primario">Carregar</button>
+    <div id="progresso" class="progresso" hidden></div>
+    <p class="nota">A primeira carga de um fundo ou período baixa os arquivos da CVM e pode levar alguns minutos; depois fica em cache.</p>
+  </aside>
+  <main>
+    <nav id="abas" class="abas" role="tablist"></nav>
+    <section id="conteudo" class="conteudo"><div class="vazio">Escolha os fundos e clique em <b>Carregar</b>.</div></section>
+  </main>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
