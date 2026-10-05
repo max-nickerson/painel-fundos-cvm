@@ -46,7 +46,7 @@ GRUPOS = {
     "MILLS": "Mills", "EUROFARMA": "Eurofarma", "IOCHPE": "Iochpe-Maxion", "CCR|MOTIVA": "Motiva (CCR)", "ECORODOVIAS": "EcoRodovias",
     "ELETROBRAS|CENTRAIS ELETRICAS BRASILEIRAS|FURNAS|CHESF|ELETRONORTE": "Eletrobras", "TAESA|TRANSMISSORA ALIANCA": "Taesa",
     "ISA ENERGIA|CTEEP": "ISA Energia", "AUREN|CESP|AES BRASIL": "Auren", "NOVA TRANSPORTADORA DO SUDESTE": "NTS", "VLI ": "VLI",
-    "ITAU": "Itaú", "BRADESCO": "Bradesco", "SANTANDER": "Santander", "BANCO DO BRASIL": "Banco do Brasil", "CAIXA ECONOMICA": "Caixa",
+    "ITAU": "Itaú", "BRADESCO": "Bradesco", "SANTANDER": "Santander", "BANCO DO BRASIL": "Banco do Brasil", "CAIXA ECONOMICA": "Caixa Econômica",
     "BTG": "BTG Pactual", "VOTORANTIM|BANCO BV": "BV", "XP ": "XP", "SAFRA": "Safra", "DAYCOVAL": "Daycoval",
     "TESOURO NACIONAL|SECRETARIA DO TESOURO": "Tesouro Nacional",
 }
@@ -386,6 +386,192 @@ def anbima_debentures():
         return pd.DataFrame(), pd.DataFrame()
     hist = pd.concat([_le_anbima(f) for f in fs], ignore_index=True)
     return hist[hist.data == hist.data.max()], hist
+
+
+# ------------------------------------------------------------------ SND (debentures.com.br), FIDC (CVM) e Treasury: cobertura total
+SND = "https://www.debentures.com.br/exploreosnd/consultaadados/emissoesdedebentures/"
+UA = {"User-Agent": "Mozilla/5.0"}
+
+
+def _get(url, tent=4, **kw):
+    for t in range(tent):
+        try:
+            r = requests.get(url, headers=UA, timeout=300, **kw)
+            r.raise_for_status()
+            return r.content
+        except requests.RequestException:
+            if t == tent - 1:
+                raise
+            time.sleep(3 * (t + 1))
+
+
+def _tabela_snd(conteudo, inicio):
+    t = conteudo.decode("latin1").splitlines()
+    i = next((j for j, l in enumerate(t) if l.startswith(inicio)), None)
+    if i is None:
+        return pd.DataFrame()
+    a = pd.read_csv(io.StringIO("\n".join(t[i:])), sep="\t", dtype=str, quoting=3)
+    a.columns = [c.strip() for c in a.columns]
+    return a.apply(lambda s: s.str.strip())
+
+
+def _diario(f):                    # arquivo que muda: rebaixa 1x por dia
+    return not f.exists() or date.fromtimestamp(f.stat().st_mtime) < date.today()
+
+
+def snd_caracteristicas():
+    """Cadastro de TODAS as debentures do SND (ativas e ja vencidas/excluidas): indice, taxa de emissao, vencimento,
+    periodicidade de juros, amortizacao e se e incentivada (Lei 12.431)."""
+    partes = []
+    for exc in ("False", "True"):
+        f = CACHE / f"snd_caracteristicas_{exc}.txt"
+        if _diario(f):
+            try:
+                f.write_bytes(_get(SND + f"caracteristicas_e.asp?tip_deb=publicas&op_exc={exc}&ativo="))
+            except requests.RequestException:
+                pass
+        if f.exists():
+            partes.append(_tabela_snd(f.read_bytes(), "Codigo do Ativo"))
+    a = pd.concat(partes, ignore_index=True) if partes else pd.DataFrame()
+    if not len(a):
+        return pd.DataFrame()
+    dt = lambda c: pd.to_datetime(a[c], format="%d/%m/%Y", errors="coerce")
+    meses = lambda c, u: pd.to_numeric(a[c], errors="coerce") * np.where(a[u].eq("DIA"), 1 / 30, 1)
+    out = pd.DataFrame({"codigo": a["Codigo do Ativo"], "empresa": a["Empresa"], "cnpj": a["CNPJ"],
+                        "venc": dt("Data de Saida / Novo Vencimento").fillna(dt("Data de Vencimento")),
+                        "indice": a["indice"].map(_sem_acento),
+                        "pct": pd.to_numeric(a["Percentual Multiplicador/Rentabilidade"], errors="coerce"),
+                        "juros": pd.to_numeric(a["Juros Criterio Novo - Taxa"].str.replace(",", "."), errors="coerce"),
+                        "cada_juros": meses("Juros Criterio Novo - Cada", "Juros Criterio Novo - Unidade"),
+                        "cada_amort": meses("Amortizacao - Cada", "Amortizacao - Unidade"),
+                        "carencia": dt("Amortizacao - Carencia"),
+                        "incentivada": a["Deb. Incent. (Lei 12.431)"].eq("S")})
+    return out.drop_duplicates("codigo").set_index("codigo")
+
+
+def snd_pu(datas, workers=4, log=print):
+    """PU par (curva de emissao, com juros acumulados e amortizacoes) de todas as debentures em cada data.
+    Um arquivo pequeno por data, guardado: so baixa datas novas."""
+    vazio = lambda d: CACHE / f"snd_pu_{d:%Y%m%d}_vazio"        # feriado: marcado para nao pedir de novo
+
+    def um(d):
+        if vazio(d).exists():
+            return None
+        partes = []
+        for e in ("False", "True"):             # ativas + ja vencidas/excluidas
+            f = CACHE / f"snd_pu_{d:%Y%m%d}_{e}.txt"
+            if not f.exists():
+                try:
+                    b = _get(SND + f"puhistorico_e.asp?op_exc={e}&ativo=&dt_ini={d:%d/%m/%Y}&dt_fim={d:%d/%m/%Y}")
+                except requests.RequestException:
+                    return None
+                if e == "False" and b.count(b"\n") < 20:     # feriado / sem dados
+                    if d < pd.Timestamp.today().normalize() - pd.Timedelta(days=7):
+                        vazio(d).touch()
+                    return None
+                f.write_bytes(b)
+            partes.append(_tabela_snd(f.read_bytes(), "Data do PU"))
+        a = pd.concat(partes, ignore_index=True)
+        a = a[a.iloc[:, 0].str.match(r"\d\d/\d\d/\d{4}", na=False)]
+        num = lambda s: pd.to_numeric(s.str.replace(".", "", regex=False).str.replace(",", ".", regex=False), errors="coerce")
+        return pd.DataFrame({"data": d, "codigo": a.iloc[:, 1].values, "pu_par": num(a.iloc[:, 5]).values})
+    novas = [d for d in datas if not (CACHE / f"snd_pu_{d:%Y%m%d}_True.txt").exists() and not vazio(d).exists()]
+    if novas:
+        log(f"SND: PU par das debêntures em {len(novas)} fins de mês (só na 1a vez)...")
+    with ThreadPoolExecutor(workers) as ex:
+        out = [x for x in ex.map(um, datas) if x is not None]
+    return pd.concat(out, ignore_index=True).drop_duplicates(["data", "codigo"]) if out else pd.DataFrame(columns=["data", "codigo", "pu_par"])
+
+
+FIDC_URL = "https://dados.cvm.gov.br/dados/FIDC/DOC/INF_MENSAL/DADOS/"
+_MEIO = [15, 45, 75, 105, 135, 165, 270, 540, 900, 1440]       # meio de cada faixa de prazo (dias) da tabela V
+
+
+def _prazo_fidc(z, nome):
+    t = pd.read_csv(z.open(nome), sep=";", encoding="latin1", dtype=str, quoting=3)
+    c = "CNPJ_FUNDO_CLASSE" if "CNPJ_FUNDO_CLASSE" in t.columns else "CNPJ_FUNDO"
+    b = t[[k for k in t.columns if re.match(r"TAB_V_A\d+_VL_PRAZO_VENC", k)]].apply(pd.to_numeric, errors="coerce").fillna(0).values
+    tot = b.sum(1)
+    return pd.DataFrame({"cnpj": t[c].values, "mes": t.DT_COMPTC.str[:7].values,
+                         "anos": np.where(tot > 0, (b * _MEIO).sum(1) / np.where(tot > 0, tot, 1) / 365.25, np.nan)}).dropna()
+
+
+def _series_fidc(z, n2, n3, n6):
+    """Valor da cota (tab X_2), rentabilidade do mes (X_3) e desempenho esperado (X_6) de cada classe/serie de cada FIDC."""
+    le = lambda n: pd.read_csv(z.open(n), sep=";", encoding="latin1", dtype=str, quoting=3)
+    a, b = le(n2), le(n3)
+    e = le(n6) if n6 in z.namelist() else pd.DataFrame(columns=list(a.columns[:4]) + ["TAB_X_CLASSE_SERIE", "TAB_X_PR_DESEMP_ESPERADO"])
+    c = "CNPJ_FUNDO_CLASSE" if "CNPJ_FUNDO_CLASSE" in a.columns else "CNPJ_FUNDO"
+    e = e.rename(columns={"CNPJ_FUNDO": c}) if c not in e.columns else e
+    for t in (a, b, e):
+        t["n"] = t.groupby([c, "DT_COMPTC", "TAB_X_CLASSE_SERIE"]).cumcount()
+    k = [c, "DT_COMPTC", "TAB_X_CLASSE_SERIE", "n"]
+    x = a.merge(b, on=k, how="outer").merge(e[k + ["TAB_X_PR_DESEMP_ESPERADO"]], on=k, how="left")
+    num = lambda s: pd.to_numeric(s.str.replace(",", ".", regex=False), errors="coerce")
+    return pd.DataFrame({"cnpj": x[c].values, "mes": x.DT_COMPTC.str[:7].values, "serie": x.TAB_X_CLASSE_SERIE.str.strip().values,
+                         "cota": num(x.TAB_X_VL_COTA).values, "rent": num(x.TAB_X_VL_RENTAB_MES).values,
+                         "esperado": num(x.TAB_X_PR_DESEMP_ESPERADO).values})
+
+
+def fidc_mensal(desde, log=print):
+    """Do informe mensal de FIDC da CVM: (1) prazo medio (anos) dos recebiveis a vencer de cada FIDC (tabela V) =
+    duration estimada da cota; (2) valor da cota e rentabilidade de cada classe/serie (tabelas X_2/X_3) = spread da
+    serie que o fundo tem. Guarda so o resultado (pequeno), nao os zips."""
+    f, fs = CACHE / "fidc_prazo3.parquet", CACHE / "fidc_series3.parquet"
+    tem = pd.read_parquet(f) if f.exists() else pd.DataFrame(columns=["cnpj", "mes", "anos"])
+    ser = [pd.read_parquet(fs)] if fs.exists() else []
+    feitos = set(tem.mes)
+    hoje = pd.Timestamp.today()
+    novos = []
+    for a in range(int(desde[:4]), hoje.year + 1):
+        ms = [f"{a}-{m:02d}" for m in range(1, 13) if pd.Timestamp(a, m, 1) <= hoje and f"{a}-{m:02d}" >= desde]
+        falta = [m for m in ms if m not in feitos]
+        if not falta:
+            continue
+        urls = [FIDC_URL + f"inf_mensal_fidc_{m.replace('-', '')}.zip" for m in falta] if a >= 2025 else [FIDC_URL + f"HIST/inf_mensal_fidc_{a}.zip"]
+        for u in urls:
+            try:
+                z = zipfile.ZipFile(io.BytesIO(_get(u, tent=2)))
+            except (requests.RequestException, zipfile.BadZipFile):
+                continue
+            log(f"FIDC: prazo e rentabilidade das séries ({u.rsplit('/', 1)[1]})...")
+            nomes = z.namelist()
+            for n in nomes:
+                if "_tab_V_" in n:
+                    novos.append(_prazo_fidc(z, n))
+                if "_tab_X_2_" in n and n.replace("_X_2_", "_X_3_") in nomes:
+                    ser.append(_series_fidc(z, n, n.replace("_X_2_", "_X_3_"), n.replace("_X_2_", "_X_6_")))
+    if novos:
+        tem = pd.concat([tem] + novos, ignore_index=True).drop_duplicates(["cnpj", "mes"], keep="last")
+        tem.to_parquet(f, index=False)
+        pd.concat(ser, ignore_index=True).drop_duplicates(["cnpj", "mes", "serie", "cota"], keep="last").to_parquet(fs, index=False)
+    return tem, (pd.concat(ser, ignore_index=True) if ser else pd.DataFrame(columns=["cnpj", "mes", "serie", "cota", "rent", "esperado"]))
+
+
+def treasury():
+    """Curva de juros do Tesouro americano (treasury.gov, gratuito), no formato de tesouro() para usar em curva()."""
+    tenor = {"1 Mo": 1 / 12, "3 Mo": .25, "6 Mo": .5, "1 Yr": 1, "2 Yr": 2, "3 Yr": 3, "5 Yr": 5, "7 Yr": 7, "10 Yr": 10, "20 Yr": 20, "30 Yr": 30}
+    partes = []
+    for a in range(int(DESDE[:4]), date.today().year + 1):
+        f = CACHE / f"treasury_{a}.csv"
+        if not f.exists() or (a == date.today().year and _diario(f)):
+            try:
+                f.write_bytes(_get("https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/"
+                                   f"{a}/all?type=daily_treasury_yield_curve&field_tdr_date_value={a}&page&_format=csv", tent=2))
+            except requests.RequestException:
+                continue
+        if f.exists():
+            partes.append(pd.read_csv(f))
+    if not partes:
+        return {}
+    d = pd.concat(partes, ignore_index=True)
+    d["data"] = pd.to_datetime(d.Date, format="%m/%d/%Y")
+    d = d.drop_duplicates("data").sort_values("data")
+    cols = [c for c in tenor if c in d.columns]
+    x = np.array([tenor[c] for c in cols])
+    por_dia = {r.data: (x[~np.isnan(v)], v[~np.isnan(v)]) for r, v in zip(d.itertuples(), d[cols].to_numpy(float)) if (~np.isnan(v)).sum() > 2}
+    datas = sorted(por_dia)
+    return {"UST": (np.array(datas, dtype="datetime64[ns]"), datas, por_dia)}
 
 
 def sgs(codigo, desde):

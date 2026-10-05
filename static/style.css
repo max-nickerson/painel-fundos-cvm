@@ -85,6 +85,15 @@ tr.nosso td:first-child { box-shadow: inset 3px 0 0 var(--nosso); }
 .ponto { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 6px; vertical-align: 0; }
 .nota { color: var(--muted); font-size: 11.5px; margin: 8px 0 0; }
 
+/* filtros de ativos: categorias liga/desliga + busca + quantos */
+.filtros { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-t { border: 1px solid var(--line-2); background: var(--surface); color: var(--text-2); border-radius: 999px; padding: 4px 11px; font-size: 12.5px; }
+.chip-t[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.chip-t.mudo { border-style: dashed; }
+.filtros .busca { width: min(320px, 100%); }
+.muted { color: var(--muted); font-size: 12px; }
+
 /* selecao multipla (consolidado) */
 .multi { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--surface); min-height: 44px; }
 .multi .chip { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 3px 4px 3px 10px; font-size: 12.5px; background: var(--surface-2); }

@@ -17,9 +17,11 @@ Os fundos ficam em duas listas no topo de `lookthrough_cvm.py` (ou de `painel.py
 ## Três abas
 | Aba | O que mostra (por fundo, buscando pelo nome digitado) |
 |---|---|
-| **Carteira** | Tabela por categoria: % PL, financeiro (R$ mm), spread CDI e duration ponderados + total; derivativos à parte (sem % PL). Evolução do % PL e do spread por categoria. Top 10 ativos com grupo econômico, spread e duration. Maiores grupos econômicos. |
-| **Retorno** | Período livre. Retorno e %CDI por categoria, 10 melhores e piores ativos, posição do fundo no risco x retorno de todos os fundos. |
-| **Consolidado** | Escolha os fundos (digitando, ou Todos / Nossos / Peers) e o período: só fundos ativos desde o início do período. Retorno acumulado (nossos em laranja, peers em cinza, CDI tracejado) e ranking. |
+| **Carteira** | Tabela por categoria (% PL, financeiro R$ mm, spread CDI e duration ponderados, total). Evolução do % PL e do spread por categoria. Ativos (código - vencimento, categoria, grupo econômico, % PL, spread, duration, PU, fonte) com filtro de categorias, quantidade (5/10/15/20/30/todos) e busca por ativo, emissor, grupo ou código; maiores grupos econômicos com o mesmo filtro. |
+| **Retorno** | Período livre. Retorno e %CDI por categoria; melhores e piores ativos por contribuição (com % PL médio), com filtro de categorias, quantidade e busca. |
+| **Consolidado** | Escolha os fundos (digitando, ou Todos / Nossos / Peers) e o período: só fundos ativos desde o início do período. Retorno acumulado (nossos em laranja, peers em cinza, CDI tracejado), risco x retorno e ranking. |
+
+Categorias: **Caixa** (disponibilidades + compromissadas + provisões), **LF, LFSN, LFSC, DEB, DEBIN, Bonds, CRA, CRI, NC, FIDC**; o que não se encaixa fica com o nome da CVM (Títulos Públicos, CDB, FII...). DEBIN = debênture incentivada (Lei 12.431, cadastro do SND). LFSC = LF perpétua; LFSN = LF com prazo > 6 anos (a CVM não informa a subordinação).
 
 ## Um arquivo só (copiar e colar)
 1. Instale o Python 3.11+ (python.org; no Windows marque *Add python.exe to PATH*).
@@ -36,7 +38,14 @@ uvicorn server:app --port 7860
 
 ## Método
 - **Carteira:** look-through da CDA da CVM (abre cotas de fundos até o ativo final). Os fundos têm até 3 meses para publicar a carteira aberta, então a CVM republica os arquivos mensais; o painel confere uma vez por dia se mudaram e rebaixa. Meses com muita parte confidencial são marcados "(confid.)".
-- **Spread CDI e duration:** debêntures pela taxa indicativa ANBIMA; IPCA+ e prefixados viram spread contra a curva do Tesouro (IPCA+ / Prefixado) no mesmo prazo; %CDI vira (x−100%)×CDI. Caixa e compromissadas valem 0.
+- **Spread CDI e duration (100% dos ativos de crédito; cada ativo mostra a fonte):**
+  1. ANBIMA (taxa indicativa do dia mais próximo do fim do mês);
+  2. debêntures fora dela: taxa de emissão e fluxo (juros/amortização) do **SND** + preço que o fundo informou à CVM ÷ PU par do SND → taxa de mercado (testado contra a ANBIMA: erro mediano 0,01 pp em DI+ e 0,09 pp em IPCA+);
+  3. taxa contratada informada à CVM (LF, CDB, CRA, NC...);
+  4. FIDC: série que o fundo tem (achada pelo valor da cota) no informe mensal de FIDC da CVM — mediana de 6 meses da rentabilidade acima do CDI; duration = prazo médio dos recebíveis;
+  5. demais (CRI sem taxa, bonds, offshore): implícito pela variação do preço (bonds: em US$, contra o Treasury);
+  6. o que sobrar: média da categoria no fundo (marcado "estimado").
+  IPCA+ e prefixados viram spread contra a curva do Tesouro no mesmo prazo. Ações, FII, FIP, ETF e FIAGRO: não se aplica.
 - **Retorno por categoria:** cada ativo rende CDI + seu spread, ou a variação real de preço quando ela é crível. Futuros (DI1, DAP, DOL/WDO) têm o P&L estimado e somado aos ativos que protegem (DAP → IPCA+, DI1 → prefixados, dólar → exterior); não existe categoria "derivativos". A diferença para o retorno real da cota é distribuída pelo peso, então as categorias somam o retorno do fundo.
 - Grupo econômico: mapa por nome do emissor (`GRUPOS`), fácil de ampliar.
 

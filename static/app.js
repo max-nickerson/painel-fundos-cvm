@@ -12,7 +12,8 @@ const mesBR = (m) => (m ? MESES[+m.slice(5, 7) - 1] + "/" + m.slice(0, 4) : "–
 const dataBR = (d) => (d ? d.slice(8, 10) + "/" + d.slice(5, 7) + "/" + d.slice(0, 4) : "–");
 const semAcento = (t) => String(t).normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase();
 const espera = (ms) => new Promise((ok) => setTimeout(ok, ms));
-const st = { V: null, F: {}, aba: "carteira", fundo: null, mesCart: {}, ret: { de: null, ate: null }, cons: { sel: null, de: null, ate: null, ord: "ret", asc: false } };
+const st = { V: null, F: {}, aba: "carteira", fundo: null, mesCart: {}, ret: { de: null, ate: null }, cons: { sel: null, de: null, ate: null, ord: "ret", asc: false },
+  A: {}, cf: { fora: new Set(["Caixa"]), n: 15, q: "" }, rf: { fora: new Set(["Caixa"]), n: 15, q: "" } };
 
 // ------------------------------------------------------------------ tema e abas
 try { const t = localStorage.getItem("tema"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
@@ -121,6 +122,22 @@ function cabecalhoFundo(el, f, extra = "") {
   $("#ctl").prepend(campoBusca((x) => { st.fundo = x.id; desenha(); }, "Trocar de fundo: digite nome ou CNPJ...", st.aba === "carteira"));
 }
 
+// ------------------------------------------------------------------ filtros de ativos (categorias liga/desliga, quantos, busca)
+function filtros(box, todas, f, redesenha, placeholder) {
+  box.innerHTML = `<div class="filtros"><div class="chips">${todas.map((c) => `<button class="chip-t" data-c="${esc(c)}" aria-pressed="${!f.fora.has(c)}">${esc(c)}</button>`).join("")}
+      <button class="chip-t mudo" data-t="1">Todas</button><button class="chip-t mudo" data-t="0">Nenhuma</button></div>
+    <div class="controles"><div class="busca"><input type="search" class="q" placeholder="${placeholder}" value="${esc(f.q)}"></div>
+      <label>Mostrar <select class="n">${[5, 10, 15, 20, 30, 0].map((n) => `<option value="${n}" ${n === f.n ? "selected" : ""}>${n || "Todos"}</option>`).join("")}</select></label></div></div>`;
+  const marca = () => box.querySelectorAll("[data-c]").forEach((x) => x.setAttribute("aria-pressed", !f.fora.has(x.dataset.c)));
+  box.querySelectorAll("[data-c]").forEach((b) => (b.onclick = () => { const c = b.dataset.c; f.fora.has(c) ? f.fora.delete(c) : f.fora.add(c); marca(); redesenha(); }));
+  box.querySelectorAll("[data-t]").forEach((b) => (b.onclick = () => { f.fora = new Set(b.dataset.t === "1" ? [] : todas); marca(); redesenha(); }));
+  $(".q", box).oninput = (e) => { f.q = e.target.value; redesenha(); };
+  $(".n", box).onchange = (e) => { f.n = +e.target.value; redesenha(); };
+}
+const passa = (f, x) => !f.fora.has(x.categoria) && (!f.q.trim() || semAcento([x.ativo, x.grupo, x.emissor, x.codigo].join(" ")).includes(semAcento(f.q.trim())));
+const corta = (arr, n) => (n ? arr.slice(0, n) : arr);
+const fonteCurta = (v) => `<span class="muted">${esc(v || "–")}</span>`;
+
 // ------------------------------------------------------------------ CARTEIRA
 async function carteira(el) {
   const f = fundoPor(st.fundo);
@@ -138,25 +155,21 @@ async function carteira(el) {
   $("#mes").onchange = (e) => { st.mesCart[f.id] = e.target.value; desenha(); };
 
   const linhas = C.cats.map((c) => ({ ...c })).concat([{ ...C.total, _cls: "total", categoria: "Total ponderado" }]);
-  if (C.deriv.length) {
-    linhas.push({ categoria: "Derivativos (nocional estimado)", _cls: "secao" });
-    C.deriv.forEach((d) => linhas.push({ categoria: `${d.contrato} · ${d.lado}${d.contratos ? ` · ${num(d.contratos, 0)} contratos` : ""}`, perc: null, fin: d.fin, spread: null, duration: d.prazo, _der: 1 }));
-  }
   const tab = tabela([
     { t: "Categoria", k: "categoria", w: 1 },
-    { t: "% PL", k: "perc", n: 1, f: (v, r) => (r._cls === "secao" ? "" : r._der ? "–" : pct(v)) },
-    { t: "Financeiro (R$ mm)", k: "fin", n: 1, f: (v, r) => (r._cls === "secao" ? "" : num(v)) },
-    { t: "Spread CDI+ (% a.a.)", k: "spread", n: 1, f: (v, r) => (r._cls === "secao" || r._der ? "" : num(v)) },
-    { t: "Duration (anos)", k: "duration", n: 1, f: (v, r) => (r._cls === "secao" ? "" : num(v)) },
+    { t: "% PL", k: "perc", n: 1, f: (v) => pct(v) },
+    { t: "Financeiro (R$ mm)", k: "fin", n: 1, f: (v) => num(v) },
+    { t: "Spread CDI+ (% a.a.)", k: "spread", n: 1, f: (v) => num(v) },
+    { t: "Duration (anos)", k: "duration", n: 1, f: (v) => num(v) },
   ], linhas);
   const conf = C.conf >= 0.5 ? ` · ${pct(C.conf, 1)} do PL ainda confidencial` : "";
+  const fontes = Object.entries(C.fontes || {}).filter(([, v]) => v >= 0.1).map(([k, v]) => `${esc(k)} ${pct(v, 1)}`).join(" · ");
   $("#corpo").innerHTML = cartao(`Carteira de ${mesBR(mes)} por categoria`, `PL R$ ${num(C.pl_mm, 2)} mm · look-through (cotas de fundos abertas até o ativo)${conf}`, tab +
-    `<p class="nota">Spread CDI+ = equivalente em CDI: debêntures pela taxa indicativa ANBIMA de ${dataBR(C.anbima)} (IPCA+ menos a NTN-B de mesma duration); CDBs, LFs e crédito pela taxa informada à CVM; caixa e compromissadas = 0. FIDCs e cotas de fundos não têm taxa pública. Médias ponderadas pelo % do PL, só onde há taxa.</p>`) +
-    `<div class="grade g2">${cartao("% do PL por categoria", "Evolução mensal (sem derivativos)", '<div id="g_aloc"></div>')}${cartao("Spread CDI+ por categoria", "Média ponderada no mês, % a.a. (debêntures só nos meses com marcação ANBIMA guardada)", '<div id="g_spread"></div>')}</div>
-    <div class="grade g-tabela">${cartao("Top 10 ativos", `% do PL em ${mesBR(mes)}`, '<div id="t_top"></div>')}${cartao("Maiores grupos econômicos", "% do PL", '<div id="g_grupos"></div>')}</div>`;
+    `<p class="nota">Spread CDI+ = equivalente em CDI (IPCA+ e prefixados contra a curva do Tesouro de mesma duration). Cobertura de 100% dos ativos de crédito; ações, FII, FIP, ETF e FIAGRO não têm spread. Fonte, em % do PL: ${fontes}.</p>`) +
+    `<div class="grade g2">${cartao("% do PL por categoria", "Evolução mensal", '<div id="g_aloc"></div>')}${cartao("Spread CDI+ por categoria", "Média ponderada no mês, % a.a.", '<div id="g_spread"></div>')}</div>
+    <div class="cartao"><h3>Ativos de ${mesBR(mes)}</h3><p class="sub">Maiores posições por % do PL · filtre por categoria ou busque por ativo, emissor, grupo econômico ou código</p>
+      <div id="f_at"></div><div class="grade g-tabela" style="margin:12px 0 0"><div id="t_top"></div><div><h3>Maiores grupos econômicos</h3><p class="sub">% do PL nas categorias escolhidas</p><div id="g_grupos"></div></div></div></div>`;
 
-  $("#t_top").innerHTML = tabela([{ t: "Ativo", k: "ativo", w: 1 }, { t: "Grupo econômico", k: "grupo", w: 1 }, { t: "% PL", k: "perc", n: 1, f: (v) => pct(v) },
-    { t: "Spread CDI+", k: "spread", n: 1, f: (v) => num(v) }, { t: "Duration", k: "duration", n: 1, f: (v) => num(v) }], C.top);
   const series = {};
   D.carteira.forEach((x, i) => x.cats.forEach((c) => { (series[c.categoria] ||= Array(D.carteira.length).fill(0))[i] = c.perc; }));
   const tops = categoriasPrincipais(series), cores = st.V.cat_cores;
@@ -165,13 +178,36 @@ async function carteira(el) {
   plota($("#g_aloc"), agrup.map((a) => ({ x: ms.map((m) => m + "-15"), y: a.y, name: a.c, stackgroup: "a", line: { width: 0.5, color: css("--surface") },
     fillcolor: a.cor, hovertemplate: "%{y:.1f}%" })), layout({ yaxis: { ticksuffix: "%", gridcolor: css("--line") } }), 360);
   const sp = {};
-  D.carteira.forEach((x, i) => x.cats.forEach((c) => { if (c.spread != null) (sp[c.categoria] ||= Array(D.carteira.length).fill(null))[i] = c.spread; }));
-  plota($("#g_spread"), tops.filter((c) => sp[c]).map((c) => ({ x: ms.map((m) => m + "-15"), y: sp[c], name: c, mode: "lines+markers", connectgaps: false,
-    line: { color: cores[tops.indexOf(c) % cores.length], width: 2 }, marker: { size: 4 }, hovertemplate: "%{y:.2f}%" })),
+  D.carteira.forEach((x, i) => x.cats.forEach((c) => { if (c.spread != null && c.perc > 0.05) (sp[c.categoria] ||= Array(D.carteira.length).fill(null))[i] = c.spread; }));
+  const comSpread = tops.filter((c) => sp[c] && c !== "Caixa" && c !== "Títulos Públicos");
+  plota($("#g_spread"), comSpread.map((c) => ({ x: ms.map((m) => m + "-15"), y: sp[c], name: c, mode: "lines", connectgaps: false,
+    line: { color: cores[tops.indexOf(c) % cores.length], width: 2 }, hovertemplate: "%{y:.2f}%" })),
     layout({ yaxis: { ticksuffix: "%", gridcolor: css("--line") } }), 360);
-  const g = C.grupos.slice().reverse();
-  plota($("#g_grupos"), [{ type: "bar", orientation: "h", x: g.map((x) => x.perc), y: g.map((x) => x.grupo), marker: { color: cores[0] }, hovertemplate: "%{y}: %{x:.2f}% do PL<extra></extra>" }],
-    layout({ hovermode: "closest", margin: { l: 8, r: 14, t: 6, b: 30 }, yaxis: { automargin: true, gridcolor: "rgba(0,0,0,0)" }, xaxis: { ticksuffix: "%", gridcolor: css("--line") } }), 400);
+
+  $("#t_top").innerHTML = `<div class="vazio">Carregando ativos...</div>`;
+  const k = f.id + mes;
+  if (!st.A[k]) st.A[k] = await (await fetch(`/api/ativos/${f.id}?mes=${mes}`)).json();
+  if (st.fundo !== f.id || st.aba !== "carteira" || !$("#t_top")) return;
+  const A = st.A[k].map((x) => ({ ...x, ativo: x.rotulo }));
+  const peso = {};
+  A.forEach((x) => (peso[x.categoria] = (peso[x.categoria] || 0) + x.perc));
+  const todas = Object.keys(peso).sort((a, b) => peso[b] - peso[a]);
+  const cols = [{ t: "Ativo", k: "ativo", w: 1 }, { t: "Categoria", k: "categoria" }, { t: "Grupo econômico", k: "grupo", w: 1 },
+    { t: "% PL", k: "perc", n: 1, f: (v) => pct(v) }, { t: "Spread CDI+", k: "spread", n: 1, f: (v) => num(v) },
+    { t: "Duration", k: "duration", n: 1, f: (v) => num(v) }, { t: "PU (R$)", k: "pu", n: 1, f: (v) => num(v) }, { t: "Fonte", k: "fonte", f: fonteCurta }];
+  const redesenha = () => {
+    const F = st.cf, lista = A.filter((x) => passa(F, x)).sort((a, b) => b.perc - a.perc);
+    const soma = lista.reduce((s, x) => s + x.perc, 0);
+    $("#t_top").innerHTML = tabela(cols, corta(lista, F.n), { alt: 640 }) +
+      `<p class="nota">${lista.length} ativo(s) · ${pct(soma)} do PL nas categorias escolhidas${F.n && lista.length > F.n ? ` · mostrando ${F.n}` : ""}</p>`;
+    const gp = {};
+    lista.forEach((x) => (gp[x.grupo] = (gp[x.grupo] || 0) + x.perc));
+    const g = corta(Object.entries(gp).sort((a, b) => b[1] - a[1]), F.n || 40).reverse();
+    plota($("#g_grupos"), [{ type: "bar", orientation: "h", x: g.map((x) => x[1]), y: g.map((x) => x[0]), marker: { color: cores[0] }, hovertemplate: "%{y}: %{x:.2f}% do PL<extra></extra>" }],
+      layout({ hovermode: "closest", margin: { l: 8, r: 14, t: 6, b: 30 }, yaxis: { automargin: true, gridcolor: "rgba(0,0,0,0)" }, xaxis: { ticksuffix: "%", gridcolor: css("--line") } }), Math.max(220, 24 * g.length + 50));
+  };
+  filtros($("#f_at"), todas, st.cf, redesenha, "Buscar ativo, emissor, grupo ou código...");
+  redesenha();
 }
 
 // ------------------------------------------------------------------ RETORNO
@@ -233,38 +269,41 @@ async function retorno(el) {
     return { categoria: c, peso: sP / Math.max(nP, 1), contrib, ret: nR ? (ret - 1) * 100 : null, pcdi: nR && cdi ? ((ret - 1) / cdi) * 100 : null };
   }).filter((r) => Math.abs(r.peso) > 0.05 || Math.abs(r.contrib) > 0.005).sort((x, y) => y.contrib - x.contrib);
   linhas.push({ _cls: "total", categoria: "Fundo (retorno da cota)", peso: 100, contrib: tot * 100, ret: tot * 100, pcdi: cdi ? (tot / cdi) * 100 : null });
-  const somaAt = {};
-  R.contrib.forEach(([ia, jm, v]) => { if (jm >= a && jm <= b) somaAt[ia] = (somaAt[ia] || 0) + v; });
-  const ativos = Object.entries(somaAt).map(([ia, v]) => ({ ...R.ativos[ia], contrib: v }));
-  const melhores = ativos.slice().sort((x, y) => y.contrib - x.contrib).slice(0, 10), piores = ativos.slice().sort((x, y) => x.contrib - y.contrib).slice(0, 5);
+  const soma = {}, pesoAt = {};
+  R.contrib.forEach(([ia, jm, v, w]) => { if (jm >= a && jm <= b) { soma[ia] = (soma[ia] || 0) + v; pesoAt[ia] = (pesoAt[ia] || 0) + (w || 0); } });
+  const ativos = Object.keys(soma).map((ia) => ({ ...R.ativos[ia], contrib: soma[ia], perc: pesoAt[ia] / J.length }));
   const hedge = J.reduce((s, j) => s + (R.meses[j].hedge || 0), 0);
+  const per = `${mesBR(ms[a])} a ${mesBR(ms[b])}`;
 
-  $("#corpo").innerHTML = `<div class="kpis">${kpi("Retorno do fundo", pct(tot * 100), `${mesBR(ms[a])} a ${mesBR(ms[b])}`, cls(tot))}${kpi("CDI", pct(cdi * 100), "mesmo período")}
+  $("#corpo").innerHTML = `<div class="kpis">${kpi("Retorno do fundo", pct(tot * 100), per, cls(tot))}${kpi("CDI", pct(cdi * 100), "mesmo período")}
       ${kpi("% do CDI", pct(cdi ? (tot / cdi) * 100 : null, 1), "")}${kpi("Excesso sobre o CDI", pp((tot - cdi) * 100), "", cls(tot - cdi))}${kpi("Derivativos", pp(hedge), "já alocado nos ativos protegidos", cls(hedge))}</div>` +
     cartao("Retorno por categoria", "Contribuição em pontos percentuais do PL; retorno e % do CDI da própria categoria no período", tabela([
       { t: "Categoria", k: "categoria", w: 1 }, { t: "Peso médio", k: "peso", n: 1, f: (v) => pct(v, 1) }, { t: "Contribuição", k: "contrib", n: 1, f: (v) => `<span class="${cls(v)}">${pp(v)}</span>` },
       { t: "Retorno", k: "ret", n: 1, f: (v) => pct(v) }, { t: "% do CDI", k: "pcdi", n: 1, f: (v) => pct(v, 0) }], linhas) +
-      `<p class="nota">Estimado com as carteiras mensais da CVM: variação de preço das posições + carrego do caixa + derivativos (futuro de DAP → ativos IPCA+, DI1 → prefixados, dólar → ativos no exterior, estimados pelas curvas do Tesouro, PTAX e IPCA) + a diferença para o retorno real da cota (taxas, negociação, marcação fora do esperado) distribuída nas categorias pelo peso. Cada ativo rende CDI + seu spread, ou a variação real de preço quando ela é crível. A soma das categorias fecha com o retorno real da cota.</p>`) +
-    `<div class="grade g-tabela">${cartao("Ativos que mais contribuíram", `${mesBR(ms[a])} a ${mesBR(ms[b])}`, '<div id="t_mel"></div><h3 style="margin-top:14px">Piores</h3><div id="t_pio"></div>')}
-      ${cartao("Risco x retorno: todos os fundos", "Mesmo período · laranja = nossos · cinza = peers", '<div id="g_rr"></div>')}</div>`;
-  const cols = [{ t: "Ativo", k: "ativo", w: 1 }, { t: "Grupo econômico", k: "grupo", w: 1 }, { t: "Categoria", k: "categoria", w: 1 },
-    { t: "Contribuição", k: "contrib", n: 1, f: (v) => `<span class="${cls(v)}">${pp(v, 3)}</span>` }];
-  $("#t_mel").innerHTML = tabela(cols, melhores);
-  $("#t_pio").innerHTML = tabela(cols, piores);
-  riscoRetorno($("#g_rr"), ms[a] + "-01", ms[b] + "-31", f.id);
+      `<p class="nota">Estimado com as carteiras mensais da CVM: cada ativo rende CDI + seu spread, ou a variação real de preço quando ela é crível; caixa rende CDI; derivativos (DAP → ativos IPCA+, DI1 → prefixados, dólar → ativos no exterior) entram nos ativos que protegem; a diferença para o retorno real da cota (taxas, negociação, marcação) é distribuída pelo peso. A soma das categorias fecha com o retorno real da cota.</p>`) +
+    `<div class="cartao"><h3>Ativos por contribuição</h3><p class="sub">${per} · % PL = peso médio no período · filtre por categoria ou busque por ativo, emissor, grupo ou código</p>
+      <div id="f_ret"></div><div class="grade g2" style="margin:12px 0 0"><div><h3>Melhores</h3><div id="t_mel"></div></div><div><h3>Piores</h3><div id="t_pio"></div></div></div></div>`;
+  const peso = {};
+  ativos.forEach((x) => (peso[x.categoria] = (peso[x.categoria] || 0) + Math.abs(x.perc)));
+  const todas = Object.keys(peso).sort((x, y) => peso[y] - peso[x]);
+  const cols = [{ t: "Ativo", k: "ativo", w: 1 }, { t: "Categoria", k: "categoria" }, { t: "Grupo econômico", k: "grupo", w: 1 },
+    { t: "% PL", k: "perc", n: 1, f: (v) => pct(v) }, { t: "Contribuição", k: "contrib", n: 1, f: (v) => `<span class="${cls(v)}">${pp(v, 3)}</span>` }];
+  const redesenha = () => {
+    const F = st.rf, lista = ativos.filter((x) => passa(F, x));
+    $("#t_mel").innerHTML = tabela(cols, corta(lista.slice().sort((x, y) => y.contrib - x.contrib), F.n), { alt: 560 });
+    $("#t_pio").innerHTML = tabela(cols, corta(lista.slice().sort((x, y) => x.contrib - y.contrib), F.n), { alt: 560 });
+  };
+  filtros($("#f_ret"), todas, st.rf, redesenha, "Buscar ativo, emissor, grupo ou código...");
+  redesenha();
 }
-function riscoRetorno(el, de, ate, destaque) {
-  const [i0, i1] = indicesDatas(de, ate);
-  const pts = st.V.fundos.map((f) => ({ f, e: estatPeriodo(f, i0, i1) })).filter((x) => x.e);
-  const grupo = (arr, nome, cor, tam, linha) => ({ type: "scatter", mode: "markers+text", name: nome, x: arr.map((p) => p.e.vol), y: arr.map((p) => p.e.pcdi),
-    text: arr.map((p) => (p.f.nosso || p.f.id === destaque ? p.f.nome : "")), textposition: "top center", textfont: { size: 11, color: css("--text-1") },
-    customdata: arr.map((p) => [p.f.nome, p.e.ret]), marker: { size: tam, color: cor, line: linha, opacity: 0.9 },
+function riscoRetorno(el, linhas) {
+  const grupo = (arr, nome, cor) => ({ type: "scatter", mode: "markers+text", name: nome, x: arr.map((r) => r.vol), y: arr.map((r) => r.pcdi),
+    text: arr.map((r) => (r.f.nosso || arr.length <= 12 ? r.f.nome : "")), textposition: "top center", textfont: { size: 11, color: css("--text-2") },
+    customdata: arr.map((r) => [r.f.nome, r.ret]), marker: { size: 10, color: cor, opacity: 0.9, line: { width: 1, color: css("--surface") } },
     hovertemplate: "%{customdata[0]}<br>retorno %{customdata[1]:.2f}% · %{y:.1f}% do CDI · vol %{x:.2f}%<extra></extra>" });
-  const peers = pts.filter((p) => !p.f.nosso && p.f.id !== destaque), nossos = pts.filter((p) => p.f.nosso && p.f.id !== destaque), sel = pts.filter((p) => p.f.id === destaque);
-  const dados = [grupo(peers, "Peers", "#9aa0a6", 10, { width: 0 }), grupo(nossos, "Nossos", "#eb6834", 10, { width: 0 })];
-  if (sel.length) dados.push(grupo(sel, "Selecionado", sel[0].f.nosso ? "#eb6834" : "#9aa0a6", 13, { width: 2.5, color: css("--text-1") }));
-  plota(el, dados, layout({ hovermode: "closest", legend: { orientation: "h", y: -0.2 }, xaxis: { title: "volatilidade anual (%)", gridcolor: css("--line"), zeroline: false },
-    yaxis: { title: "% do CDI", gridcolor: css("--line"), zeroline: false } }), 420);
+  plota(el, [grupo(linhas.filter((r) => !r.f.nosso), "Peers", "#9aa0a6"), grupo(linhas.filter((r) => r.f.nosso), "Nossos", "#eb6834")],
+    layout({ hovermode: "closest", legend: { orientation: "h", y: -0.2 }, xaxis: { title: "volatilidade anual (%)", gridcolor: css("--line"), zeroline: false },
+      yaxis: { title: "% do CDI", gridcolor: css("--line"), zeroline: false } }), 440);
 }
 
 // ------------------------------------------------------------------ CONSOLIDADO
@@ -306,6 +345,7 @@ function consolidado(el) {
   const ord = C.ord, sgn = C.asc ? 1 : -1;
   linhas.sort((x, y) => sgn * ((x[ord] ?? -1e9) - (y[ord] ?? -1e9)));
   $("#cc").innerHTML = cartao("Retorno acumulado", `${dataBR(V.datas[i0 + 1] || V.datas[i0])} a ${dataBR(V.datas[i1])} · CDI ${pct(cdiP)} · laranja = nossos · cinza = peers`, '<div id="g_cons"></div>') +
+    cartao("Risco x retorno", "Mesmo período e mesmos fundos · laranja = nossos · cinza = peers", '<div id="g_rr"></div>') +
     cartao("Ranking no período", fora.length ? `${fora.length} fundo(s) selecionado(s) fora por não existirem no período inteiro: ${fora.map((x) => esc(x.f.nome)).join(", ")}` : "Clique no título da coluna para ordenar",
       tabela([{ t: "#", k: "_i" }, { t: "Fundo", k: "nome", w: 1, f: (v, r) => `${r.f.nosso ? '<span class="ponto" style="background:var(--nosso)"></span>' : '<span class="ponto" style="background:#9aa0a6"></span>'}${esc(r.f.nome)}` },
         { t: "Retorno", k: "ret", n: 1, ord: "ret", f: (v) => `<span class="${cls(v)}">${pct(v)}</span>` }, { t: "% do CDI", k: "pcdi", n: 1, ord: "pcdi", f: (v) => pct(v, 1) },
@@ -321,4 +361,5 @@ function consolidado(el) {
   const c0 = V.cdi[i0];
   dados.push({ x: xs, y: V.cdi.slice(i0, i1 + 1).map((v) => (v / c0 - 1) * 100), name: "CDI", mode: "lines", line: { color: css("--text-1"), width: 2, dash: "dash" }, hovertemplate: "CDI: %{y:.2f}%<extra></extra>" });
   plota($("#g_cons"), dados, layout({ hovermode: "closest", yaxis: { ticksuffix: "%", gridcolor: css("--line") } }), 460);
+  riscoRetorno($("#g_rr"), linhas);
 }
