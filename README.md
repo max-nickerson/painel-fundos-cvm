@@ -1,4 +1,4 @@
-﻿# Painel de fundos (dados abertos CVM)
+# Painel de fundos (dados abertos CVM)
 
 Dashboard em Streamlit para analisar **qualquer fundo brasileiro** com dados públicos e gratuitos:
 
