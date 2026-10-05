@@ -1,98 +1,47 @@
 """
-Painel de fundos (dados abertos CVM + ANBIMA + Banco Central) - backend FastAPI.
+Painel de fundos (CVM + ANBIMA + Tesouro Direto + Banco Central + IBGE) - backend FastAPI.
 Rodar local:  uvicorn server:app --port 7860      (abre http://localhost:7860)
-Hugging Face Spaces (Docker): ver Dockerfile.
-Cada carga roda em segundo plano (a 1a vez de um fundo/periodo baixa arquivos da CVM) e o navegador acompanha o progresso.
+Na partida baixa/processa TODOS os fundos (NOSSOS_FUNDOS + PEERS em lookthrough_cvm.py) e salva o resultado do dia
+em dados_painel/painel/<data>/. O navegador mostra o progresso e abre quando termina.
 """
-import hashlib
-import io
 import json
 import math
 import os
+import re
 import threading
-import unicodedata
-import uuid
-import zipfile
-from collections import OrderedDict
 from datetime import date
 
 import numpy as np
 import pandas as pd
-import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 import lookthrough_cvm as lt
 
-CORES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
-CINZA = "#898781"
-CONTABIL = r"(?i)pagar|receber|obriga|termo|disponibilidade|exigibilidade|swap|confidencial|ajuste"
 AQUI = os.path.dirname(os.path.abspath(__file__))
-app = FastAPI(title="Painel de fundos CVM")
+app = FastAPI(title="Painel de fundos")
 app.mount("/static", StaticFiles(directory=os.path.join(AQUI, "static")), name="static")
 
-JOBS, RESULTADOS, LOCK = {}, OrderedDict(), threading.Lock()
-CAD = {"df": None, "erro": None}
+CAT_CORES = ["#2a78d6", "#1baf7a", "#eda100", "#e87ba4", "#4a3aa7", "#008300", "#e34948", "#7ba7d9"]
+NOSSAS_CORES = ["#eb6834", "#c24f1d", "#f29a6b", "#a8401a", "#f5b38d"]
+GENERICO = (r"(?i)\b(FUNDO DE INVESTIMENTO|FUNDO|EM DIREITOS CREDIT[OÓ]RIOS|DE INVESTIMENTO|FIDC|FIC|FI|COTAS|MULTIMERCADO|"
+            r"RENDA FIXA|CR[EÉ]DITO PRIVADO|RESPONSABILIDADE LIMITADA|RESP LTDA|N[AÃ]O PADRONIZADO|NP|LONGO PRAZO|LP)\b")
+METODO = 5                                     # suba quando mudar o calculo -> refaz o cache do dia
+CAIXA = ("Caixa e provisões", "Operações Compromissadas")
+CREDITO = ("Debêntures", "Títulos de Crédito Privado", "Títulos ligados ao agronegócio",
+           "Outros valores mobiliários registrados na CVM objeto de oferta pública", "Investimento no Exterior", "Outras aplicações")
+MESES_COD = "FGHJKMNQUVXZ"
+PRE = {"status": "parado", "log": [], "erro": None, "pasta": None}
 
 
-# ------------------------------------------------------------------ cadastro (busca por nome/CNPJ)
-def _sem_acento(s):
-    return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().upper()
-
-
-def carrega_cadastro():
-    try:
-        r = requests.get("https://dados.cvm.gov.br/dados/FI/CAD/DADOS/registro_fundo_classe.zip", timeout=300)
-        z = zipfile.ZipFile(io.BytesIO(r.content))
-        c = pd.read_csv(z.open("registro_classe.csv"), sep=";", encoding="latin1", dtype=str, quoting=3,
-                        usecols=["CNPJ_Classe", "Denominacao_Social", "Situacao"])
-        c.columns = ["cnpj", "nome", "situacao"]
-        a = pd.read_csv("https://dados.cvm.gov.br/dados/FI/CAD/DADOS/cad_fi.csv", sep=";", encoding="latin1", dtype=str,
-                        quoting=3, usecols=["CNPJ_FUNDO", "DENOM_SOCIAL", "SIT"])
-        a.columns = ["cnpj", "nome", "situacao"]
-        c = pd.concat([c, a]).dropna(subset=["cnpj", "nome"])
-        c["cnpj"] = c.cnpj.map(lt.fmt)
-        c["ativo"] = ~c.situacao.fillna("").str.upper().str.contains("CANCEL")
-        c = c.sort_values("ativo", ascending=False).drop_duplicates("cnpj")
-        c["chave"] = c.nome.map(_sem_acento) + " " + c.cnpj.str.replace(r"\D", "", regex=True)
-        CAD["df"] = c.reset_index(drop=True)
-    except Exception as e:                                  # sem cadastro a busca por CNPJ continua funcionando
-        CAD["erro"] = f"{type(e).__name__}: {e}"
-
-
-
-
-@app.get("/api/busca")
-def busca(q: str = ""):
-    q = q.strip()
-    dig = "".join(ch for ch in q if ch.isdigit())
-    c = CAD["df"]
-    if c is None:
-        return [{"cnpj": lt.fmt(dig), "nome": "(cadastro carregando) " + lt.fmt(dig), "ativo": True}] if len(dig) == 14 else []
-    if len(q) < 2:
-        return []
-    toks = _sem_acento(q).split()
-    m = pd.Series(True, index=c.index)
-    for t in toks:
-        m &= c.chave.str.contains(t, regex=False)
-    r = c[m].head(25)
-    return [{"cnpj": x.cnpj, "nome": x.nome, "ativo": bool(x.ativo)} for x in r.itertuples()]
-
-
-@app.get("/api/padrao")
-def padrao():
-    nomes = dict(zip(CAD["df"].cnpj, CAD["df"].nome)) if CAD["df"] is not None else {}
-    return [{"cnpj": lt.cnpj_of(x), "nome": nomes.get(lt.cnpj_of(x), n), "curto": n} for n, x in lt.PEERS.items()]
-
-
-# ------------------------------------------------------------------ helpers de serializacao
+# ------------------------------------------------------------------ utilidades
 def limpo(o):
     if isinstance(o, dict):
         return {str(k): limpo(v) for k, v in o.items()}
     if isinstance(o, (list, tuple)):
         return [limpo(v) for v in o]
-    if isinstance(o, (np.integer,)):
+    if isinstance(o, np.integer):
         return int(o)
     if isinstance(o, (np.floating, float)):
         return None if (math.isnan(o) or math.isinf(o)) else round(float(o), 6)
@@ -106,249 +55,362 @@ def limpo(o):
         return o
 
 
-def registros(df, cols=None):
-    df = df if cols is None else df[cols]
-    return [dict(zip(df.columns, r)) for r in df.itertuples(index=False)]
+def wavg(v, w):
+    v, w = np.asarray(v, float), np.asarray(w, float)
+    ok = ~np.isnan(v) & (w > 0)
+    return float(np.average(v[ok], weights=w[ok])) if ok.any() else None
 
 
-def wavg(x, col, w="perc_pl"):
-    ok = x[col].notna() & x[w].gt(0)
-    return float(np.average(x.loc[ok, col], weights=x.loc[ok, w])) if ok.any() else None
+def fim_mes(m):
+    return pd.Timestamp(m) + pd.offsets.MonthEnd(0)
 
 
-def curto(nome):
-    n = nome.upper()
-    for a, b in [("FUNDO DE INVESTIMENTO FINANCEIRO", "FIF"), ("FUNDO DE INVESTIMENTO EM COTAS DE FUNDOS DE INVESTIMENTO", "FIC FI"),
-                 ("FUNDO DE INVESTIMENTO", "FI"), ("MULTIMERCADO", "MM"), ("CRÉDITO PRIVADO", "CP"), ("RENDA FIXA", "RF"),
-                 ("RESPONSABILIDADE LIMITADA", "RL"), ("RESP LIMITADA", "RL"), ("LONGO PRAZO", "LP")]:
-        n = n.replace(a, b)
-    return n[:30].strip()
+def contrato(texto):
+    """Tipo, vencimento (ano, mes) de um futuro a partir do codigo/descricao da CDA (ex.: DI1FUTF29, FUT DAP/Q30)."""
+    t = lt._sem_acento(texto)
+    tipo = ("DAP" if re.search(r"DAP|CUPOM DE IPCA|DI X IPCA", t) else "DI1" if re.search(r"DI1|DI DE 1 DIA", t)
+            else "WDO" if "WDO" in t else "DOL" if re.search(r"DOL|DOLAR", t) else "DDI" if re.search(r"DDI|FRC|CUPOM CAMBIAL", t)
+            else "IND" if re.search(r"\bIND|WIN|IBOV", t) else "OUTRO")
+    m = re.search(r"(?:DI1|DAP|DOL|WDO|DDI|FRC|IND|WIN)\s*(?:FUT)?\s*/?\s*([FGHJKMNQUVXZ])(\d{2})\b", t)
+    return tipo, ((2000 + int(m.group(2)), MESES_COD.index(m.group(1)) + 1) if m else None)
 
 
-# ------------------------------------------------------------------ montagem de tudo que o painel mostra
-def monta(fundos, desde, log):
-    """fundos: lista de (nome curto, cnpj). Devolve um dicionario JSON com todas as abas."""
-    workers = max(1, min(4, (os.cpu_count() or 2)))
-    meses, dia = lt.prepara(sorted(c for _, c in fundos), desde, workers=workers, log=log)
-    nomes = dict(fundos)
-    ordem = [n for n, _ in fundos]
-    log("Montando look-through e indicadores...")
-    df = lt.lookthrough(nomes, meses) if meses else pd.DataFrame()
-    d = lt.diario(nomes, dia)
-    cdi = lt.cdi_mensal(desde, diario=True)
-    cdi_m = (1 + cdi).groupby(cdi.index.strftime("%Y-%m")).prod() - 1
-    an_u, an_h = lt.anbima_debentures()
-    out = {"meta": {"desde": desde, "fundos": [{"nome": n, "cnpj": c, "cor": CORES[i % 8]} for i, (n, c) in enumerate(fundos)],
-                    "gerado": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"),
-                    "ult_carteira": max(meses) if meses else None,
-                    "ult_cota": d.data.max().strftime("%Y-%m-%d") if len(d) else None,
-                    "anbima_data": an_u.data.iloc[0].strftime("%Y-%m-%d") if len(an_u) else None,
-                    "anbima_dias": int(an_h.data.nunique()) if len(an_h) else 0}}
+# ------------------------------------------------------------------ calculo por fundo
+class Contexto:
+    """Dados de mercado compartilhados por todos os fundos."""
 
-    cart = df[~df.derivativo] if len(df) else df
-    ult_mes = cart.groupby("fundo").mes.max() if len(cart) else pd.Series(dtype=str)
-    ult = cart[cart.mes == cart.fundo.map(ult_mes)] if len(cart) else cart
-    aberto = lt.mes_aberto(df) if len(df) else pd.Series(dtype=str)
-    media = (cart[~cart.categoria.str.contains(CONTABIL)].groupby(["fundo", "mes", "categoria"]).perc_pl.sum()
-             .groupby("categoria").mean().sort_values(ascending=False)) if len(cart) else pd.Series(dtype=float)
-    top_cat = media.index[:7].tolist()
-    out["categorias"] = {c: CORES[i] for i, c in enumerate(top_cat)} | {"Outros": CINZA}
-    cat7 = lambda s: s.where(s.isin(top_cat), "Outros")
-    rent = lt.rentabilidade(d, cdi_m) if len(d) else pd.DataFrame(columns=["fundo", "mes", "retorno", "cdi", "pct_cdi"])
+    def __init__(self, log):
+        log("Baixando curvas (Tesouro Direto), IPCA (IBGE), PTAX e CDI (Banco Central) e marcação ANBIMA...")
+        self.curvas = lt.tesouro()
+        self.ipca = lt.ipca_indice()
+        self.ptax = lt.sgs(1, lt.DESDE)
+        self.cdi_d = lt.cdi_mensal(lt.DESDE, diario=True)
+        self.cdi_m = (1 + self.cdi_d).groupby(self.cdi_d.index.strftime("%Y-%m")).prod() - 1
+        self.an_u, self.an_h = lt.anbima_debentures()
+        self.an_dias = sorted(self.an_h.data.unique()) if len(self.an_h) else []
 
-    # ---- cotas, KPIs
-    kp, cotas = [], {}
-    for f in ordem:
-        x = d[d.fundo == f]
-        q = x.set_index("data").VL_QUOTA.dropna()
-        if q.empty:
-            continue
-        fim = q.index[-1]
-        ini = q[q.index <= fim - pd.Timedelta(days=365)]
-        base = ini.index[-1] if len(ini) else q.index[0]
-        r12, c12 = q.iloc[-1] / q[base] - 1, (1 + cdi[(cdi.index > base) & (cdi.index <= fim)]).prod() - 1
-        ano = q[q.index < pd.Timestamp(fim.year, 1, 1)]
-        u = ult[ult.fundo == f]
-        x12 = x[x.data > base]
-        kp.append({"fundo": f, "pl_mi": x.VL_PATRIM_LIQ.iloc[-1] / 1e6, "ret12": r12 * 100, "pct_cdi12": r12 / c12 * 100 if c12 else None,
-                   "ret_ano": (q.iloc[-1] / ano.iloc[-1] - 1) * 100 if len(ano) else None,
-                   "vol": q[q.index > base].pct_change().std() * np.sqrt(252) * 100, "dd": (q / q.cummax() - 1).min() * 100,
-                   "capt12_mi": (x12.CAPTC_DIA.sum() - x12.RESG_DIA.sum()) / 1e6, "cotistas": x.NR_COTST.iloc[-1],
-                   "ativos": u.chave.nunique() if len(u) else None,
-                   "top10_emissores": u.groupby("emissor").perc_pl.sum().nlargest(10).sum() if len(u) else None,
-                   "ult_carteira": ult_mes.get(f), "carteira_aberta": aberto.get(f), "ult_cota": fim.strftime("%Y-%m-%d")})
-        cotas[f] = {"datas": [t.strftime("%Y-%m-%d") for t in q.index], "acum": ((q / q.iloc[0] - 1) * 100).tolist(),
-                    "dd": ((q / q.cummax() - 1) * 100).tolist(), "pl": (x.set_index("data").VL_PATRIM_LIQ / 1e6).reindex(q.index).tolist(),
-                    "cotistas": x.set_index("data").NR_COTST.reindex(q.index).tolist()}
-    out["kpis"], out["cotas"] = kp, cotas
-    c0 = cdi[cdi.index >= d.data.min()] if len(d) else cdi.iloc[:0]
-    out["cdi"] = {"datas": [t.strftime("%Y-%m-%d") for t in c0.index], "acum": (((1 + c0).cumprod() - 1) * 100).tolist()}
-    cap = d.groupby(["fundo", "mes"]).apply(lambda x: (x.CAPTC_DIA.sum() - x.RESG_DIA.sum()) / 1e6, include_groups=False).rename("capt_mi")
-    out["mensal"] = registros(rent.join(cap, on=["fundo", "mes"])[["fundo", "mes", "retorno", "cdi", "pct_cdi", "capt_mi"]]) if len(rent) else []
+    def cdi_aa(self, m):
+        x = self.cdi_d[self.cdi_d.index <= fim_mes(m)]
+        return float(((1 + x.iloc[-1]) ** 252 - 1) * 100) if len(x) else np.nan
 
-    # ---- por fundo: alocacao, carteira, credito, movimentos, derivativos, marcacao
-    por = {}
-    for f in [f for f in ordem if f in set(cart.fundo)] if len(cart) else []:
-        g, gd = cart[cart.fundo == f], df[df.fundo == f]
-        u = ult[ult.fundo == f]
-        ev = g.assign(c=cat7(g.categoria)).pivot_table(index="mes", columns="c", values="perc_pl", aggfunc="sum", fill_value=0)
-        p = {"ult_mes": ult_mes.get(f), "mes_aberto": aberto.get(f),
-             "alocacao": {"meses": ev.index.tolist(), "series": {c: ev[c].tolist() for c in top_cat + ["Outros"] if c in ev}},
-             "emissores": registros(u.groupby("emissor").perc_pl.sum().nlargest(15).reset_index())}
-        cp = (u.groupby(["categoria", "ativo", "codigo", "emissor"], dropna=False)
-              .agg(perc_pl=("perc_pl", "sum"), veiculo=("veiculo", "first")).reset_index().sort_values("perc_pl", ascending=False))
-        p["carteira"] = registros(cp)
+    def ptax_em(self, m):
+        x = self.ptax[self.ptax.index <= fim_mes(m)]
+        return float(x.iloc[-1]) if len(x) else np.nan
 
-        # credito (ultima carteira aberta) + ANBIMA
-        ma = aberto.get(f, ult_mes.get(f))
-        ua = g[g.mes == ma]
-        deb = ua[ua.categoria.eq("Debêntures")]
-        cols = ["codigo", "indice", "tipo", "taxa_ind", "duration_anos", "pct_par", "venc"]
-        deb = deb.merge(an_u[cols], on="codigo", how="left") if len(an_u) else deb.assign(**{c: np.nan for c in cols[1:]})
-        com = deb[deb.taxa_ind.notna()]
-        hist = {}
-        if len(an_h) and an_h.data.nunique() > 1 and len(com):
-            evh = deb[["codigo", "perc_pl"]].merge(an_h[["data", "codigo", "tipo", "taxa_ind", "duration_anos"]], on="codigo")
-            s1 = evh[evh.tipo == "DI +"].groupby("data").apply(lambda x: wavg(x, "taxa_ind"), include_groups=False)
-            s2 = evh.groupby("data").apply(lambda x: wavg(x, "duration_anos"), include_groups=False)
-            hist = {"datas": [t.strftime("%Y-%m-%d") for t in s2.index], "spread_di": s1.reindex(s2.index).tolist(), "duration": s2.tolist()}
-        o = ua[~ua.categoria.str.contains(CONTABIL)].copy()
-        venc = pd.to_datetime(o.vencimento, errors="coerce")
-        o["prazo"] = (venc - (pd.to_datetime(o.mes) + pd.offsets.MonthEnd(0))).dt.days / 365.25
-        faixa = pd.cut(o.prazo, [-1, 1, 2, 3, 5, 100], labels=["até 1a", "1-2a", "2-3a", "3-5a", "5a+"]).astype(str).replace("nan", "s/ venc.")
-        resumo = o.groupby("categoria").apply(lambda x: pd.Series({
-            "perc_pl": x.perc_pl.sum(), "perc_com_taxa": x[x.pct_indexador.notna() | x.cupom.notna() | x.taxa_pre.notna()].perc_pl.sum(),
-            "pct_indexador": wavg(x, "pct_indexador"), "cupom": wavg(x, "cupom"), "taxa_pre": wavg(x, "taxa_pre"),
-            "prazo": wavg(x, "prazo")}), include_groups=False).reset_index().sort_values("perc_pl", ascending=False)
-        p["credito"] = {
-            "mes": ma, "deb_pl": deb.perc_pl.sum(), "cobertura": com.perc_pl.sum() / deb.perc_pl.sum() * 100 if deb.perc_pl.sum() else None,
-            "spread_di": wavg(com[com.tipo == "DI +"], "taxa_ind"), "pl_di": com[com.tipo == "DI +"].perc_pl.sum(),
-            "taxa_ipca": wavg(com[com.tipo == "IPCA +"], "taxa_ind"), "pl_ipca": com[com.tipo == "IPCA +"].perc_pl.sum(),
-            "duration": wavg(com, "duration_anos"),
-            "por_tipo": registros(deb.assign(t=deb.tipo.fillna("sem taxa ANBIMA")).groupby("t").perc_pl.sum().reset_index()),
-            "debs": registros(deb.sort_values("perc_pl", ascending=False),
-                              ["ativo", "codigo", "perc_pl", "indice", "tipo", "taxa_ind", "duration_anos", "pct_par", "venc", "veiculo"]),
-            "hist": hist,
-            "indexador": registros(o.groupby(o.indexador.fillna("não informado na CDA")).perc_pl.sum().reset_index().rename(columns={"indexador": "k"})),
-            "prazo": registros(o.groupby(faixa).perc_pl.sum().reindex(["até 1a", "1-2a", "2-3a", "3-5a", "5a+", "s/ venc."]).fillna(0)
-                               .rename_axis("k").reset_index()),
-            "rating": registros(o.groupby(o.rating.fillna("sem rating")).perc_pl.sum().rename_axis("k").reset_index()),
-            "resumo": registros(resumo)}
+    def anbima_mes(self, m, recentes):
+        """Marcacao ANBIMA para a carteira do mes: o dia guardado mais proximo do fim do mes (ate 10 dias);
+        nos meses mais recentes, o ultimo dia disponivel."""
+        if not self.an_dias:
+            return None, None
+        alvo = fim_mes(m)
+        perto = [d for d in self.an_dias if abs((pd.Timestamp(d) - alvo).days) <= 10]
+        d = min(perto, key=lambda d: abs((pd.Timestamp(d) - alvo).days)) if perto else (self.an_dias[-1] if m in recentes else None)
+        return (d, self.an_h[self.an_h.data == d].drop_duplicates("codigo").set_index("codigo")) if d is not None else (None, None)
 
-        # movimentacoes
-        giro = g.groupby("mes").agg(c=("compra_pct", "sum"), v=("venda_pct", "sum"))
-        ms = sorted(g.mes.unique())
-        mv = {}
-        for i, m in enumerate(ms):
-            x = g[g.mes == m].groupby(["ativo", "categoria"]).agg(compra=("compra_pct", "sum"), venda=("venda_pct", "sum")).reset_index()
-            e = {"compras": registros(x.nlargest(15, "compra")[["ativo", "categoria", "compra"]]),
-                 "vendas": registros(x.nlargest(15, "venda")[["ativo", "categoria", "venda"]])}
-            if i:
-                a, b = set(g[g.mes == ms[i - 1]].chave), set(g[g.mes == m].chave)
-                e |= {"novos": len(b - a), "pct_novos": g[(g.mes == m) & g.chave.isin(b - a)].perc_pl.sum(),
-                      "zerados": len(a - b), "pct_zerados": g[(g.mes == ms[i - 1]) & g.chave.isin(a - b)].perc_pl.sum()}
-            mv[m] = e
-        p["movimentos"] = {"meses": giro.index.tolist(), "compras": giro.c.tolist(), "vendas": giro.v.tolist(), "por_mes": mv}
 
-        # derivativos e moeda
-        dv = gd[gd.derivativo]
-        t = dv.pivot_table(index="mes", columns="tipo_ativo", values="perc_pl", aggfunc="sum", fill_value=0) if len(dv) else pd.DataFrame()
-        fx = pd.DataFrame({"exterior": gd[gd.categoria.eq("Investimento no Exterior")].groupby("mes").perc_pl.sum(),
-                           "dolar": dv[dv.tipo_ativo.fillna("").str.contains("(?i)dol|dólar")].groupby("mes").perc_pl.sum()}).fillna(0)
-        p["derivativos"] = {"meses": t.index.tolist(), "series": {c: t[c].tolist() for c in t.columns},
-                            "atual": registros(dv[dv.mes == dv.mes.max()].groupby(["categoria", "tipo_ativo", "ativo", "veiculo"])
-                                               .perc_pl.sum().reset_index().sort_values("perc_pl")) if len(dv) else [],
-                            "moeda": {"meses": fx.index.tolist(), "exterior": fx.exterior.tolist(), "dolar": fx.dolar.tolist()}}
+def enriquece(g, m, ctx, recentes):
+    """Spread sobre o CDI (% a.a., equivalente) e duration (anos) de cada linha da carteira do mes."""
+    g = g.copy()
+    anos = ((pd.to_datetime(g.vencimento, errors="coerce") - fim_mes(m)).dt.days / 365.25).clip(lower=0)
+    cdi = ctx.cdi_aa(m)
+    sp, du = pd.Series(np.nan, index=g.index), pd.Series(np.nan, index=g.index)
+    idx = g.indexador.fillna("")
+    cup = g.cupom.where(g.cupom.fillna(0) != 0)
+    pct_i = g.pct_indexador
+    # informado na CDA (depositos bancarios, credito privado)
+    di = idx.str.contains("DI de um dia|Selic")
+    sp[di] = cup[di].fillna((pct_i[di] - 100) / 100 * cdi)
+    du[di] = anos[di]
+    ip = idx.str.contains("IPCA")
+    sp[ip] = cup[ip] - lt.curva(ctx.curvas, "IPCA", fim_mes(m), anos[ip].fillna(3).values)
+    du[ip] = anos[ip]
+    pr = idx.str.contains("prefixada")
+    sp[pr] = g.taxa_pre[pr].fillna(cup[pr]) - lt.curva(ctx.curvas, "PRE", fim_mes(m), anos[pr].fillna(1).values)
+    du[pr] = anos[pr]
+    # titulos publicos e caixa
+    tp = g.categoria.eq("Títulos Públicos")
+    lft = tp & g.ativo.str.contains("FINANCEIRAS DO TESOURO|LFT", na=False)
+    sp[tp], du[tp] = 0.0, anos[tp]
+    du[lft] = 0.0
+    cx = g.categoria.isin(CAIXA)
+    sp[cx], du[cx] = 0.0, 0.0
+    # debentures: marcacao ANBIMA
+    dia, an = ctx.anbima_mes(m, recentes)
+    deb = g.categoria.eq("Debêntures") & g.codigo.notna()
+    if an is not None and deb.any():
+        a = an.reindex(g.codigo[deb])
+        tx, tipo, dur = a.taxa_ind.values, a.tipo.values, a.duration_anos.values
+        s = np.where(tipo == "DI +", tx, np.where(tipo == "% do DI", (tx - 100) / 100 * cdi, np.nan))
+        real = np.isin(tipo, ["IPCA +", "IGP-M +"])
+        s = np.where(real, tx - lt.curva(ctx.curvas, "IPCA", pd.Timestamp(dia), np.nan_to_num(dur, nan=3)), s)
+        pre = tipo == "Outros"
+        s = np.where(pre, tx - lt.curva(ctx.curvas, "PRE", pd.Timestamp(dia), np.nan_to_num(dur, nan=2)), s)
+        sp[deb], du[deb] = s, dur
+    g["spread"], g["duration"] = sp, du
+    tipo_an = g.codigo.map(ctx.an_u.drop_duplicates("codigo").set_index("codigo").tipo) if len(ctx.an_u) else pd.Series(np.nan, index=g.index)
+    g["ipca"] = tipo_an.isin(["IPCA +", "IGP-M +"]) | ip | g.ativo.str.contains("SERIE B|NTN-B", na=False)
+    g["pre"] = (tipo_an.eq("Outros") & g.categoria.eq("Debêntures")) | pr | (tp & g.ativo.str.contains(r"LETRAS DO TESOURO NACIONAL|SERIE F|LTN|NTN-F", na=False) & ~lft)
+    g["usd"] = g.categoria.eq("Investimento no Exterior") | idx.str.contains("Dólar")
+    return g, dia
 
-        # marcacao estimada
-        k = lt.contribuicao(g)
-        if len(k):
-            cc = k.assign(c=cat7(k.categoria)).pivot_table(index="mes", columns="c", values="resultado_pct", aggfunc="sum", fill_value=0)
-            rr = rent[rent.fundo == f].set_index("mes").retorno.reindex(cc.index) * 100
-            pm = {}
-            for m in cc.index:
-                km = k[k.mes == m].groupby(["ativo", "categoria"]).resultado_pct.sum().reset_index()
-                pm[m] = {"altas": registros(km.nlargest(12, "resultado_pct")), "quedas": registros(km.nsmallest(12, "resultado_pct"))}
-            tot = k.groupby(["ativo", "categoria"]).resultado_pct.sum().reset_index()
-            p["marcacao"] = {"meses": cc.index.tolist(), "series": {c: cc[c].tolist() for c in top_cat + ["Outros"] if c in cc},
-                             "real": rr.tolist(), "por_mes": pm, "periodo": {"altas": registros(tot.nlargest(15, "resultado_pct")),
-                                                                            "quedas": registros(tot.nsmallest(15, "resultado_pct"))}}
-        por[f] = p
-    out["por_fundo"] = por
 
-    # ---- comparacao
-    if len(ult):
-        pv = ult.pivot_table(index="categoria", columns="fundo", values="perc_pl", aggfunc="sum", fill_value=0)
-        pv = pv.reindex(columns=[f for f in ordem if f in pv.columns])
-        pv = pv.loc[pv.abs().max(axis=1).sort_values(ascending=False).index]
-        e = ult.groupby(["fundo", "emissor"]).perc_pl.sum()
-        comum = e.groupby(level=1).filter(lambda s: len(s) > 1).unstack(0).fillna(0)
-        comum = comum.loc[comum.sum(axis=1).sort_values(ascending=False).index].head(30) if len(comum) else comum
-        out["comparacao"] = {"alocacao": {"fundos": pv.columns.tolist(), "linhas": [[i] + r.tolist() for i, r in pv.iterrows()]},
-                             "emissores": {"fundos": comum.columns.tolist(), "linhas": [[i] + r.tolist() for i, r in comum.iterrows()]}}
+def derivativos_mes(gd, m, ctx, dur_ipca, dur_pre):
+    """Contratos futuros do mes: tipo, lado, contratos, prazo e nocional estimado (R$)."""
+    out = []
+    for r in gd.itertuples():
+        tipo, venc = contrato(f"{r.codigo or ''} {r.ativo or ''} {r.tipo_ativo or ''}")
+        if "mercado futuro" not in str(r.categoria).lower():   # termo/opcao/swap: sem P&L de futuro
+            tipo, venc = "OUTRO", None
+        lado = -1 if "vendida" in str(r.categoria).lower() else 1
+        n = abs(r.quantidade) if pd.notna(r.quantidade) else np.nan
+        if venc:
+            anos = max((pd.Timestamp(venc[0], venc[1], 15 if tipo == "DAP" else 1) - fim_mes(m)).days / 365.25, 1 / 252)
+        else:
+            anos = dur_ipca if tipo == "DAP" else dur_pre if tipo == "DI1" else 1.0
+        out.append(dict(i=r.Index, tipo=tipo, lado=lado, n=n, anos=anos, fator=r.fator, categoria=r.categoria,
+                        ativo=r.ativo, perc_cda=r.perc_pl))
+    return out
+
+
+def valor_ponto(tipo, m, ctx):
+    if tipo == "DI1":
+        return 1.0
+    if tipo == "DAP":
+        x = ctx.ipca[ctx.ipca.index <= m]
+        return 0.00025 * float(x.iloc[-1]) if len(x) else np.nan
+    return np.nan
+
+
+def pu(tipo, m, anos, ctx):
+    t = "PRE" if tipo == "DI1" else "IPCA"
+    y = float(lt.curva(ctx.curvas, t, fim_mes(m), np.array([anos]))[0])
+    return 1e5 / (1 + y / 100) ** anos
+
+
+def nocional(c, m, ctx, pl_fundo):
+    if c["tipo"] in ("DI1", "DAP") and pd.notna(c["n"]):
+        return c["lado"] * c["n"] * pu(c["tipo"], m, c["anos"], ctx) * valor_ponto(c["tipo"], m, ctx)
+    if c["tipo"] in ("DOL", "WDO") and pd.notna(c["n"]):
+        return c["lado"] * c["n"] * (50000 if c["tipo"] == "DOL" else 10000) * ctx.ptax_em(m)
+    return c["perc_cda"] / 100 * pl_fundo if pd.notna(c["perc_cda"]) else np.nan
+
+
+def pnl_futuro(c, p, m, ctx):
+    """P&L estimado (R$) do contrato entre o fim do mes p e o fim do mes m, com a posicao de p."""
+    if pd.isna(c["n"]):
+        return 0.0
+    cdi = float(ctx.cdi_m.get(m, 0.0))
+    if c["tipo"] in ("DI1", "DAP"):
+        a1 = max(c["anos"] - (fim_mes(m) - fim_mes(p)).days / 365.25, 1 / 252)
+        pu0, pu1 = pu(c["tipo"], p, c["anos"], ctx), pu(c["tipo"], m, a1, ctx)
+        if c["tipo"] == "DI1":
+            return c["lado"] * c["n"] * (pu1 - pu0 * (1 + cdi))
+        i0, i1 = ctx.ipca[ctx.ipca.index <= p], ctx.ipca[ctx.ipca.index <= m]
+        inf = float(i1.iloc[-1] / i0.iloc[-1] - 1) if len(i0) and len(i1) else 0.0
+        return c["lado"] * c["n"] * valor_ponto("DAP", m, ctx) * (pu1 - pu0 * (1 + cdi) / (1 + inf))
+    if c["tipo"] in ("DOL", "WDO"):
+        return c["lado"] * c["n"] * (50000 if c["tipo"] == "DOL" else 10000) * (ctx.ptax_em(m) - ctx.ptax_em(p))
+    return 0.0
+
+
+def detalhe(nome, cnpj, df, ctx, pl, rent):
+    """Tudo que as abas Carteira e Retorno mostram para um fundo."""
+    df = df.copy()
+    if ctx.an_h is not None and len(ctx.an_h):         # debenture sem emissor na CDA: nome do emissor pela ANBIMA
+        df["emissor"] = df.emissor.fillna(df.codigo.map(ctx.an_h.drop_duplicates("codigo", keep="last").set_index("codigo").nome))
+    emis = df[["emissor", "categoria"]].drop_duplicates()
+    gmap = {(e, c): lt.grupo(e, c) for e, c in zip(emis.emissor, emis.categoria)}
+    df["grupo"] = [gmap[(e, c)] for e, c in zip(df.emissor, df.categoria)]
+    curto = df.ativo.str.replace(GENERICO, " ", regex=True).str.replace(r"\s+", " ", regex=True).str.strip().str.slice(0, 40)
+    df["grupo"] = df.grupo.fillna(curto)
+    contabil = df.categoria.isin(["Disponibilidades", "Valores a receber", "Valores a pagar", lt.AJUSTE]) | (
+        df.categoria.str.contains(lt.PASSIVO, na=False) & ~df.derivativo)
+    df["categoria"] = df.categoria.mask(contabil, "Caixa e provisões")   # linhas contabeis numa so categoria
+    meses = sorted(df.mes.unique())
+    recentes = set(meses[-4:])
+    pl_f = {m: float(pl.get((m, cnpj), np.nan)) for m in meses}
+    cart_meses, ricos = [], {}
+    for m in meses:
+        g = df[df.mes == m]
+        nd, gd = g[~g.derivativo], g[g.derivativo]
+        e, dia = enriquece(nd, m, ctx, recentes)
+        ricos[m] = (e, gd)
+        e["fin"] = e.perc_pl / 100 * pl_f[m] / 1e6
+        cats = []
+        for c, x in e.groupby("categoria"):
+            com = x.spread.notna() & x.perc_pl.gt(0)
+            cats.append({"categoria": c, "perc": x.perc_pl.sum(), "fin": x.fin.sum(), "spread": wavg(x.spread, x.perc_pl),
+                         "duration": wavg(x.duration, x.perc_pl), "cobertura": x.perc_pl[com].sum() / x.perc_pl[x.perc_pl > 0].sum() * 100
+                         if x.perc_pl.gt(0).any() else None})
+        cats.sort(key=lambda r: -r["perc"])
+        total = {"categoria": "Total", "perc": e.perc_pl.sum(), "fin": e.fin.sum(), "spread": wavg(e.spread, e.perc_pl),
+                 "duration": wavg(e.duration, e.perc_pl)}
+        ip = e[e.ipca & e.perc_pl.gt(0)]
+        dur_ipca = wavg(ip.duration, ip.perc_pl) or 3.0
+        pr = e[e.pre & e.perc_pl.gt(0)]
+        dur_pre = wavg(pr.duration, pr.perc_pl) or 1.0
+        der = []
+        for c in derivativos_mes(gd, m, ctx, dur_ipca, dur_pre):
+            v = nocional(c, m, ctx, pl_f[m])
+            der.append({"contrato": c["tipo"] if c["tipo"] != "OUTRO" else (c["ativo"] or c["categoria"])[:40],
+                        "lado": "comprado" if c["lado"] > 0 else "vendido", "contratos": c["n"], "fin": v / 1e6 if pd.notna(v) else None,
+                        "prazo": c["anos"]})
+        dd = pd.DataFrame(der)
+        if len(dd):
+            dd = dd.groupby(["contrato", "lado"], dropna=False).agg(contratos=("contratos", "sum"), fin=("fin", "sum"),
+                                                                     prazo=("prazo", "mean")).reset_index()
+        x = e[(e.perc_pl > 0) & ~e.categoria.isin(CAIXA + ("Valores a receber", "Valores a pagar", lt.AJUSTE))]
+        x = x.assign(sw=(x.spread * x.perc_pl).fillna(0), sp=x.perc_pl.where(x.spread.notna(), 0),
+                     dw=(x.duration * x.perc_pl).fillna(0), dp=x.perc_pl.where(x.duration.notna(), 0))
+        top = (x.groupby(["ativo", "codigo"], dropna=False)
+               .agg(grupo=("grupo", "first"), categoria=("categoria", "first"), perc=("perc_pl", "sum"), sw=("sw", "sum"),
+                    sp=("sp", "sum"), dw=("dw", "sum"), dp=("dp", "sum")).reset_index().nlargest(10, "perc"))
+        top["spread"] = (top.sw / top.sp).where(top.sp > 0)
+        top["duration"] = (top.dw / top.dp).where(top.dp > 0)
+        top = top.drop(columns=["sw", "sp", "dw", "dp"])
+        gr = x.groupby("grupo").perc_pl.sum().nlargest(10).reset_index()
+        cart_meses.append({"mes": m, "pl_mm": pl_f[m] / 1e6, "anbima": dia, "conf": e[e.confidencial].perc_pl.sum(),
+                           "cats": cats, "total": total, "deriv": dd.to_dict("records") if len(dd) else [],
+                           "top": top.to_dict("records"), "grupos": gr.rename(columns={"perc_pl": "perc"}).to_dict("records")})
+
+    # ---- atribuicao mensal (retorno por categoria, hedges alocados nos ativos protegidos)
+    real = rent[rent.fundo == nome].set_index("mes").retorno
+    k = lt.contribuicao(df)
+    if len(k):                                   # variacao do preco unitario de cada posicao mantida (v/qt)
+        k = k[(k.qt > 0) & (k.qt_ant > 0) & (k.v_ant > 0)]
+        k = k.assign(rp=(k.v / k.qt) / (k.v_ant / k.qt_ant) - 1)
+        preco = k.groupby(["mes", "chave"]).rp.first()
     else:
-        out["comparacao"] = {"alocacao": {"fundos": [], "linhas": []}, "emissores": {"fundos": [], "linhas": []}}
-    RESULTADOS_DF[_chave(fundos, desde)] = (df, d)
-    while len(RESULTADOS_DF) > 6:
-        RESULTADOS_DF.pop(next(iter(RESULTADOS_DF)))
-    log("Pronto.")
-    return limpo(out)
+        preco = pd.Series(dtype=float)
+    atr_meses, cats_atr, ativos, contrib = [], {}, {}, []
+    id_ativo = lambda a, c, gr: ativos.setdefault((a, c), {"i": len(ativos), "ativo": a, "categoria": c, "grupo": gr})["i"]
+    for j in range(1, len(meses)):
+        p, m = meses[j - 1], meses[j]
+        if m not in real.index or pd.isna(real.get(m)):
+            continue
+        e0, gd0 = ricos[p]
+        w = e0[~e0.confidencial].copy()
+        w = w[w.perc_pl.abs() > 0]
+        cdi_m = float(ctx.cdi_m.get(m, 0.0))
+        # 1) retorno de cada ativo: esperado = CDI + spread proprio; usa a variacao real de preco quando ela e critica
+        #    (queda maior que 1,5 p.p. abaixo do esperado = pagamento de cupom/amortizacao -> fica o esperado)
+        esperado = (1 + cdi_m) * (1 + w.spread.fillna(0).clip(-5, 30) / 100) ** (1 / 12) - 1
+        rp = w.chave.map(preco.loc[m]) if len(preco) and m in preco.index.get_level_values(0) else pd.Series(np.nan, index=w.index)
+        r = rp.where(rp.notna() & (rp >= esperado - 0.015) & (rp <= esperado + 0.03), esperado)
+        cx = w.categoria.isin(CAIXA)
+        r[cx] = cdi_m
+        ativo_c = w.perc_pl * r
+        # 3) derivativos -> ativos protegidos
+        ip = w[w.ipca & w.perc_pl.gt(0)]
+        dur_ipca = wavg(ip.duration, ip.perc_pl) or 3.0
+        pr = w[w.pre & w.perc_pl.gt(0)]
+        dur_pre = wavg(pr.duration, pr.perc_pl) or 1.0
+        hedge = 0.0
+        for c in derivativos_mes(gd0, p, ctx, dur_ipca, dur_pre):
+            v = pnl_futuro(c, p, m, ctx) * c["fator"] / 100 * 100 if pd.notna(c["fator"]) else 0.0  # % do PL do fundo
+            if not v or np.isnan(v):
+                continue
+            alvo = (w.ipca if c["tipo"] == "DAP" else w.pre if c["tipo"] == "DI1" and w.pre.any() else w.ipca
+                    if c["tipo"] == "DI1" else w.usd if c["tipo"] in ("DOL", "WDO", "DDI") else pd.Series(False, index=w.index))
+            alvo = alvo & w.perc_pl.gt(0)
+            if not alvo.any():
+                alvo = w.perc_pl.gt(0) & ~cx
+            ativo_c[alvo] += v * w.perc_pl[alvo] / w.perc_pl[alvo].sum()
+            hedge += v
+        # 4) resto (taxas, negociacao, marcacao fora do esperado) -> todas as categorias que nao sao caixa, pelo peso
+        resid = float(real[m]) * 100 - ativo_c.sum()
+        cr = w.perc_pl.gt(0) & ~cx
+        ativo_c[cr] += resid * w.perc_pl[cr] / w.perc_pl[cr].sum()
+        atr_meses.append({"mes": m, "real": float(real[m]) * 100, "cdi": float(ctx.cdi_m.get(m, np.nan)) * 100,
+                          "hedge": hedge, "resid": resid})
+        jm = len(atr_meses) - 1
+        por_cat = ativo_c.groupby(w.categoria).sum()
+        peso = w.groupby("categoria").perc_pl.sum()
+        for c in set(por_cat.index) | set(cats_atr):
+            cats_atr.setdefault(c, {"contrib": [None] * jm, "peso": [None] * jm})
+            cats_atr[c]["contrib"].append(float(por_cat.get(c, 0.0)))
+            cats_atr[c]["peso"].append(float(peso.get(c, 0.0)))
+        pa = ativo_c[~cx].groupby([w.ativo[~cx], w.categoria[~cx], w.grupo[~cx]]).sum()   # caixa/compromissada fora do ranking
+        for (a, c, gr), v in pa.items():
+            if abs(v) > 1e-5:
+                contrib.append([id_ativo(a, c, gr), jm, float(v)])
+    for c in cats_atr.values():
+        for key in ("contrib", "peso"):
+            c[key] += [None] * (len(atr_meses) - len(c[key]))
+    return limpo({"nome": nome, "cnpj": cnpj, "carteira": cart_meses,
+                  "retorno": {"meses": atr_meses, "categorias": cats_atr,
+                              "ativos": sorted(ativos.values(), key=lambda x: x["i"]), "contrib": contrib}})
 
 
-RESULTADOS_DF = {}
-
-
-def _chave(fundos, desde):
-    return hashlib.md5((desde + "|" + "|".join(sorted(c for _, c in fundos))).encode()).hexdigest()
-
-
-def _roda(job, fundos, desde):
-    try:
-        res = monta(fundos, desde, JOBS[job]["log"].append)
-        with LOCK:
-            RESULTADOS[_chave(fundos, desde)] = res
-            while len(RESULTADOS) > 12:
-                velho = next(k for k in RESULTADOS if k != PRE.get("chave"))
-                RESULTADOS.pop(velho)
-        JOBS[job]["status"] = "ok"
-    except Exception as e:
-        JOBS[job] |= {"status": "erro", "erro": f"{type(e).__name__}: {e}"}
-
-
-# ------------------------------------------------------------------ pre-carga: todos os peers antes de abrir o painel
-DESDE_PAINEL = os.environ.get("PAINEL_DESDE", lt.DESDE)
-PRE = {"status": "parado", "log": [], "chave": None, "erro": None}
+# ------------------------------------------------------------------ pre-carga de todos os fundos
+def pasta_dia():
+    return lt.CACHE / "painel" / str(date.today())
 
 
 def precarrega(log=None):
-    """Baixa/processa todos os peers (PEERS, desde DESDE_PAINEL). Resultado do dia fica salvo em disco: reinicio rapido."""
     escreve = log or PRE["log"].append
     PRE["status"] = "rodando"
     try:
-        fundos = [(n, lt.cnpj_of(x)) for n, x in lt.PEERS.items()]
-        k = _chave(fundos, DESDE_PAINEL)
-        f = lt.CACHE / f"painel_{k}_{date.today()}.json"
-        if f.exists():
-            escreve("Usando o painel já processado hoje (cache).")
-            res = json.loads(f.read_text(encoding="utf-8"))
-        else:
-            escreve(f"Baixando e processando {len(fundos)} fundos desde {DESDE_PAINEL} (1a vez no dia pode levar minutos)...")
-            res = monta(fundos, DESDE_PAINEL, escreve)
-            for velho in lt.CACHE.glob(f"painel_{k}_*.json"):
-                velho.unlink(missing_ok=True)
-            f.write_text(json.dumps(res), encoding="utf-8")
-        with LOCK:
-            RESULTADOS[k] = res
-        PRE.update(status="ok", chave=k)
+        fundos = [(n, lt.cnpj_of(x), True) for n, x in lt.NOSSOS_FUNDOS.items()] + \
+                 [(n, lt.cnpj_of(x), False) for n, x in lt.PEERS.items()]
+        dest = pasta_dia()
+        chave = "|".join(sorted(c for _, c, _ in fundos)) + "|" + lt.DESDE + f"|m{METODO}"
+        if (dest / "visao.json").exists() and json.loads((dest / "visao.json").read_text(encoding="utf-8")).get("chave") == chave:
+            escreve("Usando o painel já processado hoje.")
+            PRE.update(status="ok", pasta=str(dest))
+            return
+        dest.mkdir(parents=True, exist_ok=True)
+        for velho in (lt.CACHE / "painel").glob("*"):
+            if velho != dest and velho.is_dir():
+                for f in velho.glob("*"):
+                    f.unlink(missing_ok=True)
+                velho.rmdir()
+        escreve(f"Baixando/atualizando dados da CVM de {len(fundos)} fundos desde {lt.DESDE}...")
+        workers = max(1, min(4, (os.cpu_count() or 2)))
+        meses, dia = lt.prepara(sorted(c for _, c, _ in fundos), lt.DESDE, workers=workers, log=escreve)
+        ctx = Contexto(escreve)
+        escreve("Carregando carteiras...")
+        carga = lt.carrega_pos(meses)
+        pl = carga[1]
+        nomes = {n: c for n, c, _ in fundos}
+        d = lt.diario(nomes, dia)
+        rent = lt.rentabilidade(d, ctx.cdi_m) if len(d) else pd.DataFrame(columns=["fundo", "mes", "retorno"])
+        for i, (n, c, _) in enumerate(fundos, 1):
+            escreve(f"[{i}/{len(fundos)}] {n}: look-through, carteira e atribuição...")
+            df = lt.lookthrough({n: c}, meses, carga)
+            fid = re.sub(r"\D", "", c)
+            if len(df):
+                (dest / (fid + ".json")).write_text(json.dumps(detalhe(n, c, df, ctx, pl, rent)), encoding="utf-8")
+                df.drop(columns=["chave", "fator"], errors="ignore").to_parquet(dest / (fid + ".parquet"), index=False)
+        # visao geral: cotas diarias de todos (para retorno em qualquer periodo, consolidado e risco x retorno)
+        datas = sorted(d.data.unique())
+        idx = pd.DatetimeIndex(datas)
+        q = d.pivot_table(index="data", columns="fundo", values="VL_QUOTA").reindex(idx)
+        plf = d.pivot_table(index="data", columns="fundo", values="VL_PATRIM_LIQ").reindex(idx)
+        cdi_idx = (1 + ctx.cdi_d.reindex(idx).fillna(0)).cumprod()
+        cores, k_nosso = {}, 0
+        for n, c, nosso in fundos:
+            cores[n] = NOSSAS_CORES[k_nosso % len(NOSSAS_CORES)] if nosso else "#9aa0a6"
+            k_nosso += nosso
+        visao = {"chave": chave, "gerado": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"), "desde": lt.DESDE,
+                 "ult_carteira": max(meses) if meses else None, "anbima": ctx.an_dias[-1] if ctx.an_dias else None,
+                 "datas": [t.strftime("%Y-%m-%d") for t in idx], "cdi": cdi_idx.tolist(),
+                 "fundos": [{"nome": n, "cnpj": c, "id": re.sub(r"\D", "", c), "nosso": nosso, "cor": cores[n],
+                             "tem_carteira": (dest / (re.sub(r"\D", "", c) + ".json")).exists(),
+                             "cota": q[n].tolist() if n in q else [], "pl": float(plf[n].dropna().iloc[-1]) / 1e6 if n in plf and plf[n].notna().any() else None}
+                            for n, c, nosso in fundos],
+                 "cat_cores": CAT_CORES}
+        (dest / "visao.json").write_text(json.dumps(limpo(visao)), encoding="utf-8")
+        escreve("Pronto.")
+        PRE.update(status="ok", pasta=str(dest))
     except Exception as e:
+        import traceback
         PRE.update(status="erro", erro=f"{type(e).__name__}: {e}")
         escreve("ERRO: " + PRE["erro"])
+        escreve(traceback.format_exc()[-1500:])
 
 
-def _inicio():                              # servidor (pasta/Docker): cadastro e pre-carga em segundo plano
-    if not CAD.get("iniciado"):
-        CAD["iniciado"] = True
-        threading.Thread(target=carrega_cadastro, daemon=True).start()
+def _inicio():                              # servidor (pasta/Docker): pre-carga em segundo plano
     if PRE["status"] == "parado":
         threading.Thread(target=precarrega, daemon=True).start()
 
@@ -356,60 +418,36 @@ def _inicio():                              # servidor (pasta/Docker): cadastro 
 app.add_event_handler("startup", _inicio)
 
 
+# ------------------------------------------------------------------ API
 @app.get("/api/inicial")
 def inicial():
-    return {"status": PRE["status"], "chave": PRE["chave"], "log": PRE["log"][-8:], "erro": PRE["erro"]}
+    return {"status": PRE["status"], "log": PRE["log"][-8:], "erro": PRE["erro"]}
 
 
-@app.post("/api/carregar")
-def carregar(body: dict):
-    fundos = [(curto(x.get("curto") or x["nome"]), lt.fmt(x["cnpj"])) for x in body.get("fundos", [])][:8]
-    if not fundos:
-        raise HTTPException(400, "escolha ao menos um fundo")
-    vistos, unicos = set(), []
-    for n, c in fundos:                              # nomes curtos repetidos ganham sufixo
-        while n in vistos:
-            n += "*"
-        vistos.add(n)
-        unicos.append((n, c))
-    desde = body.get("desde") or "2024-01"
-    k = _chave(unicos, desde)
-    if k in RESULTADOS:
-        return {"job": None, "chave": k, "status": "ok"}
-    job = uuid.uuid4().hex[:10]
-    JOBS[job] = {"status": "rodando", "log": [], "chave": k}
-    threading.Thread(target=_roda, args=(job, unicos, desde), daemon=True).start()
-    return {"job": job, "chave": k, "status": "rodando"}
+def _arquivo(nome):
+    if PRE["status"] != "ok":
+        raise HTTPException(503, "painel ainda carregando")
+    f = os.path.join(PRE["pasta"], nome)
+    if not os.path.exists(f):
+        raise HTTPException(404, "sem dados")
+    return f
 
 
-@app.get("/api/status/{job}")
-def status(job: str):
-    j = JOBS.get(job) or HTTPException(404)
-    if isinstance(j, HTTPException):
-        raise j
-    return {"status": j["status"], "log": j["log"][-6:], "erro": j.get("erro"), "chave": j["chave"]}
+@app.get("/api/visao")
+def visao():
+    return FileResponse(_arquivo("visao.json"), media_type="application/json")
 
 
-@app.get("/api/resultado/{chave}")
-def resultado(chave: str):
-    if chave not in RESULTADOS:
-        raise HTTPException(404, "resultado expirou; carregue de novo")
-    return JSONResponse(RESULTADOS[chave])
+@app.get("/api/fundo/{fid}")
+def fundo(fid: str):
+    return FileResponse(_arquivo(re.sub(r"\D", "", fid) + ".json"), media_type="application/json")
 
 
-@app.get("/api/csv/{chave}/{tipo}")
-def csv(chave: str, tipo: str):
-    if chave not in RESULTADOS_DF:
-        if chave not in RESULTADOS:
-            raise HTTPException(404)
-        m = RESULTADOS[chave]["meta"]
-        fundos = [(f["nome"], f["cnpj"]) for f in m["fundos"]]
-        meses, dia = lt.prepara(sorted(c for _, c in fundos), m["desde"], workers=1, log=lambda *_: None)
-        RESULTADOS_DF[chave] = (lt.lookthrough(dict(fundos), meses), lt.diario(dict(fundos), dia))
-    df, d = RESULTADOS_DF[chave]
-    x = df.drop(columns=["chave", "fator"], errors="ignore") if tipo == "carteira" else d
-    return Response(x.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig"), media_type="text/csv",
-                    headers={"Content-Disposition": f'attachment; filename="{tipo}.csv"'})
+@app.get("/api/csv/{fid}")
+def csv(fid: str):
+    df = pd.read_parquet(_arquivo(re.sub(r"\D", "", fid) + ".parquet"))
+    return Response(df.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig"), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="carteira_{fid}.csv"'})
 
 
 @app.get("/")

@@ -9,47 +9,36 @@ pinned: false
 short_description: Fundos brasileiros com dados abertos CVM, ANBIMA e BCB
 ---
 
-# Painel de fundos (dados abertos CVM + ANBIMA + Banco Central)
+# Painel de fundos (dados abertos CVM + ANBIMA + Tesouro + Banco Central)
 
-Página web para analisar **qualquer fundo brasileiro** com dados públicos e gratuitos. Busque por nome ou CNPJ, escolha até 8 fundos e o período.
+Painel para gestor comparar **nossos fundos** com os **peers**, só com dados públicos e gratuitos.
+Os fundos ficam em duas listas no topo de `lookthrough_cvm.py` (ou de `painel.py`): `NOSSOS_FUNDOS` e `PEERS` (`nome: CNPJ`).
 
-| Fonte | O que entra no painel |
+## Três abas
+| Aba | O que mostra (por fundo, buscando pelo nome digitado) |
 |---|---|
-| CVM – CDA (carteira mensal) | Look-through da carteira (abre cotas de fundos até o ativo final), alocação, emissores, compras e vendas do mês, derivativos, exposição externa |
-| CVM – Informe diário | Cota, rentabilidade, %CDI, drawdown, volatilidade, PL, captação líquida, cotistas |
-| CVM – Cadastro | Busca de fundos por nome ou CNPJ |
-| ANBIMA – mercado secundário de debêntures | Taxa indicativa (spread DI+ / IPCA+), PU e duration das debêntures da carteira |
-| Banco Central – SGS 12 | CDI diário |
+| **Carteira** | Tabela por categoria: % PL, financeiro (R$ mm), spread CDI e duration ponderados + total; derivativos à parte (sem % PL). Evolução do % PL e do spread por categoria. Top 10 ativos com grupo econômico, spread e duration. Maiores grupos econômicos. |
+| **Retorno** | Período livre. Retorno e %CDI por categoria, 10 melhores e piores ativos, posição do fundo no risco x retorno de todos os fundos. |
+| **Consolidado** | Escolha os fundos (digitando, ou Todos / Nossos / Peers) e o período: só fundos ativos desde o início do período. Retorno acumulado (nossos em laranja, peers em cinza, CDI tracejado) e ranking. |
 
-Abas: Visão geral · Rentabilidade · PL & captação · Alocação · Crédito · Movimentações · Derivativos & moeda · Marcação (estimada) · Comparação · Dados.
-
-## Jeito mais simples: um arquivo só (copiar e colar)
+## Um arquivo só (copiar e colar)
 1. Instale o Python 3.11+ (python.org; no Windows marque *Add python.exe to PATH*).
 2. `pip install fastapi uvicorn pandas numpy requests pyarrow openpyxl`
-3. Copie o conteúdo de [`painel.py`](painel.py) para um arquivo `painel.py` e rode `python painel.py`. Ele **baixa e processa todos os peers** (lista `PEERS` no topo do arquivo, desde `DESDE`) e só então abre o painel no navegador, com tudo pronto. A 1ª vez num computador leva alguns minutos; depois o painel do dia fica salvo e abre em segundos. `python painel.py excel` gera o Excel.
+3. Salve [`painel.py`](painel.py) numa pasta e rode `python painel.py`. Ele baixa e processa todos os fundos e só então abre o painel no navegador.
 
-## Rodar no seu computador (versão em pastas)
+Os dados ficam em **`dados_painel/`, na mesma pasta do `painel.py`**. A 1ª vez baixa ~2-3 GB da CVM (evite uma pasta sincronizada pelo OneDrive). Depois só baixa o que mudou e o painel do dia abre em segundos. `python painel.py excel` gera o Excel.
+
+## Versão em pastas
 ```bash
 pip install -r requirements.txt
 uvicorn server:app --port 7860
 ```
-Abra http://localhost:7860.
 
-## Publicar de graça no Hugging Face Spaces
-1. Crie uma conta em https://huggingface.co e um **New Space**: nome `painel-fundos`, SDK **Docker** (Blank), hardware **CPU basic (free)**.
-2. Em *Settings → Access Tokens* do Hugging Face, crie um token com permissão **Write**.
-3. Neste repositório do GitHub: *Settings → Secrets and variables → Actions* → crie os secrets `HF_USER` (seu usuário do Hugging Face) e `HF_TOKEN` (o token).
-4. Aba *Actions* → **Deploy no Hugging Face Space** → *Run workflow*. A partir daí, todo push no `main` atualiza o Space sozinho.
+## Método
+- **Carteira:** look-through da CDA da CVM (abre cotas de fundos até o ativo final). Os fundos têm até 3 meses para publicar a carteira aberta, então a CVM republica os arquivos mensais; o painel confere uma vez por dia se mudaram e rebaixa. Meses com muita parte confidencial são marcados "(confid.)".
+- **Spread CDI e duration:** debêntures pela taxa indicativa ANBIMA; IPCA+ e prefixados viram spread contra a curva do Tesouro (IPCA+ / Prefixado) no mesmo prazo; %CDI vira (x−100%)×CDI. Caixa e compromissadas valem 0.
+- **Retorno por categoria:** cada ativo rende CDI + seu spread, ou a variação real de preço quando ela é crível. Futuros (DI1, DAP, DOL/WDO) têm o P&L estimado e somado aos ativos que protegem (DAP → IPCA+, DI1 → prefixados, dólar → exterior); não existe categoria "derivativos". A diferença para o retorno real da cota é distribuída pelo peso, então as categorias somam o retorno do fundo.
+- Grupo econômico: mapa por nome do emissor (`GRUPOS`), fácil de ampliar.
 
-O painel fica em `https://huggingface.co/spaces/<seu-usuario>/painel-fundos`. Space gratuito: 2 vCPU, 16 GB de RAM; dorme depois de um tempo sem uso (a primeira visita depois disso leva ~1 min para acordar).
-
-## Também gera Excel
-`python lookthrough_cvm.py` → `lookthrough_cvm.xlsx` (gráficos, evolução, rentabilidade, top 10 por categoria, uma aba por fundo) + CSV.
-
-## Limites dos dados
-- Carteiras são **mensais**; meses recentes podem ter ativos **confidenciais** (até 6 meses). Crédito, movimentações e marcação usam o último mês "aberto".
-- Derivativos vêm pelo valor informado (em geral nocional): ficam fora da soma de 100%.
-- Quando a carteira informada não fecha com o PL, a diferença aparece como "Ajuste carteira x PL".
-- A ANBIMA gratuita guarda só ~15 dias úteis: o histórico de spread/duration cresce a partir do uso (no Space gratuito ele recomeça quando o Space reinicia).
-- Não há preço **ao vivo** gratuito de debêntures/CRI/LF (mercado de balcão); a referência pública é a taxa indicativa ANBIMA de fim de dia.
-- "Marcação (estimada)" mostra variação de preço das posições mantidas, não P&L contábil: cupons/amortizações aparecem como queda de preço.
+## Publicar no Hugging Face Spaces
+Secrets `HF_USER` e `HF_TOKEN` neste repositório e a Action **Deploy no Hugging Face Space** sobe tudo (todo push no `main` atualiza).

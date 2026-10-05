@@ -5,41 +5,66 @@ Como usar em qualquer computador:
   1) Instale o Python 3.11+ (python.org; no Windows marque "Add python.exe to PATH").
   2) No terminal:   pip install fastapi uvicorn pandas numpy requests pyarrow openpyxl
   3) Salve este arquivo como painel.py e rode:   python painel.py
-     -> baixa e processa TODOS os peers (lista PEERS abaixo, desde DESDE), e so depois abre o painel
+     -> baixa e processa NOSSOS_FUNDOS + PEERS (listas abaixo, desde DESDE) e so depois abre o painel
         no navegador em http://localhost:7860 com tudo pronto.
   Excel em vez do painel:   python painel.py excel
 
 Fontes: CVM (CDA mensal, informe diario, cadastro), ANBIMA (debentures), Banco Central (CDI). Tudo publico e gratuito.
-1a vez num computador: baixa os arquivos da CVM desde DESDE (alguns minutos). Depois fica em cache na pasta do usuario
-e o painel processado do dia e reaproveitado (abre em segundos).
+Os dados ficam na pasta dados_painel/, ao lado deste arquivo (a 1a vez baixa ~2-3 GB da CVM; evite pasta do OneDrive).
+Depois so baixa o que mudou; o painel processado do dia e reaproveitado (abre em segundos).
+Arquivos mensais republicados pela CVM (fundos tem ate 3 meses para abrir a carteira toda) sao rebaixados 1x por dia.
 """
 import sys
 import io
 import json
 import os
 import re
-import tempfile
 import time
 import zipfile
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from datetime import date
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import requests
 
-PEERS = {                       # nome: CNPJ (qualquer formato) ou link do Mais Retorno
+# ------------------------------------------------------------------ CONFIGURACAO (edite aqui)
+NOSSOS_FUNDOS = {               # nome curto: CNPJ (qualquer formato)
     "DUAL": "34.803.938/0001-61",
+}
+PEERS = {
     "AZ_ALTRO": "22.100.009/0001-07",
     "SPARTA_TOP": "14.188.162/0001-00",
     "XP_CE120": "22.003.930/0001-31",
     "CAPITANIA_P45": "20.146.294/0001-71",
+    "KINEA_CP_PREV": "26.491.419/0001-87",
+    "IBIUNA_CREDIT": "37.310.657/0001-65",
+    "DAYCOVAL_CLASSIC": "10.783.480/0001-68",
+    "BRADESCO_BONUS": "20.216.829/0001-33",
+    "RIZA_LOTUS_PREV": "43.423.186/0001-02",
 }
-DESDE = "2019-01"               # primeiro mes (CDA existe desde 2005; quanto mais antigo, mais download na 1a vez)
+DESDE = "2019-01"               # primeiro mes de carteira/cota (CDA existe desde 2005; mais antigo = mais download na 1a vez)
+# grupo economico: a CVM so informa o emissor. Regra = trecho do nome do emissor (sem acento, maiusculo) -> grupo.
+# Securitizadoras (Opea, Vert, True...) ficam como estao: o devedor do lastro nao vem na CDA.
+GRUPOS = {
+    "LOCALIZA|UNIDAS": "Localiza", "REDE D.?OR|DOR SAO LUIZ": "Rede D'Or", "AEGEA|AGUAS DO RIO|AGUAS DO PARA|EQUIPAV|CORSAN|RIOGRANDENSE DE SANEAMENTO": "Aegea",
+    "BRK AMBIENTAL": "BRK", "EQUATORIAL|CEEE": "Equatorial", "ENERGISA": "Energisa", "CEMIG": "Cemig", "COPEL": "Copel",
+    "SABESP|SANEAMENTO BASICO DO ESTADO DE SAO PAULO": "Sabesp", "COPASA|SANEAMENTO DE MINAS": "Copasa", "PETROBRAS|PETROLEO BRASILEIRO": "Petrobras",
+    "PRIO|PETRO RIO": "Prio", "PETRORECONCAVO": "PetroReconcavo", "COSAN|RAIZEN|RUMO|COMPASS|MOOVE": "Cosan", "VALE S": "Vale",
+    "SUZANO": "Suzano", "KLABIN": "Klabin", "SENDAS|ASSAI": "Assaí", "HAPVIDA|NOTRE DAME": "Hapvida", "VAMOS|SIMPAR|JSL|MOVIDA|CS INFRA": "Simpar",
+    "MILLS": "Mills", "EUROFARMA": "Eurofarma", "IOCHPE": "Iochpe-Maxion", "CCR|MOTIVA": "Motiva (CCR)", "ECORODOVIAS": "EcoRodovias",
+    "ELETROBRAS|CENTRAIS ELETRICAS BRASILEIRAS|FURNAS|CHESF|ELETRONORTE": "Eletrobras", "TAESA|TRANSMISSORA ALIANCA": "Taesa",
+    "ISA ENERGIA|CTEEP": "ISA Energia", "AUREN|CESP|AES BRASIL": "Auren", "NOVA TRANSPORTADORA DO SUDESTE": "NTS", "VLI ": "VLI",
+    "ITAU": "Itaú", "BRADESCO": "Bradesco", "SANTANDER": "Santander", "BANCO DO BRASIL": "Banco do Brasil", "CAIXA ECONOMICA": "Caixa",
+    "BTG": "BTG Pactual", "VOTORANTIM|BANCO BV": "BV", "XP ": "XP", "SAFRA": "Safra", "DAYCOVAL": "Daycoval",
+    "TESOURO NACIONAL|SECRETARIA DO TESOURO": "Tesouro Nacional",
+}
 OUT = "lookthrough_cvm.xlsx"
 WORKERS = 4
 
 URL = "https://dados.cvm.gov.br/dados/FI/DOC"
-CACHE = Path(os.environ.get("CVM_CACHE") or Path(os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()) / "cvm_cache")
+CACHE = Path(os.environ.get("PAINEL_DADOS") or Path(__file__).resolve().parent / "dados_painel")   # pasta ao lado do .py
 (CACHE / "rec").mkdir(parents=True, exist_ok=True)
 VERSAO = 2                      # muda quando o recorte guarda colunas novas (forca reprocessar)
 REN = {"CNPJ_FUNDO": "CNPJ_FUNDO_CLASSE", "CNPJ_FUNDO_COTA": "CNPJ_FUNDO_CLASSE_COTA",
@@ -189,19 +214,38 @@ def precisa(kind, m, peers):     # recorte em cache cobre os fundos pedidos?
     return not fecho(pd.read_parquet(CACHE / "rec" / f"links_{m}.parquet"), peers) <= tem
 
 
+def _modificado(u):
+    try:
+        return u, pd.Timestamp(requests.head(u, timeout=60).headers["Last-Modified"]).timestamp()
+    except (requests.RequestException, KeyError, ValueError):
+        return u, None
+
+
+def atualiza_publicacoes(cda, dia, log=print):
+    """A CVM republica o arquivo do mes conforme os fundos entregam ou abrem a carteira (ha meses de prazo).
+    Uma vez por dia confere a data de TODOS os arquivos mensais e rebaixa os que mudaram."""
+    marca_dia = CACHE / f"verificado_{date.today()}.txt"
+    if marca_dia.exists():
+        return
+    urls = [u for u in list(cda) + list(dia) if "HIST" not in u and (CACHE / u.rsplit("/", 1)[1]).exists()]
+    with ThreadPoolExecutor(8) as ex:
+        mudou = [u for u, t in ex.map(_modificado, urls) if t and t > (CACHE / u.rsplit("/", 1)[1]).stat().st_mtime]
+    for u in mudou:
+        (CACHE / u.rsplit("/", 1)[1]).unlink(missing_ok=True)
+        for m in (cda.get(u) or dia.get(u)):
+            for j in CACHE.glob(f"rec/*_{m}.json"):
+                j.unlink(missing_ok=True)
+    if mudou:
+        log(f"{len(mudou)} arquivo(s) da CVM republicado(s) desde a ultima carga: baixando de novo")
+    for velho in CACHE.glob("verificado_*.txt"):
+        velho.unlink(missing_ok=True)
+    marca_dia.write_text(f"{len(urls)} arquivos conferidos, {len(mudou)} atualizados")
+
+
 def prepara(cnpjs, desde, workers=WORKERS, log=print):
     """Baixa/recorta da CVM so o que falta. Devolve (meses de carteira, {arquivo diario: meses})."""
     cda, dia = arquivos("CDA", desde), arquivos("INF_DIARIO", desde)
-    for u in [u for u in cda if "HIST" not in u][-3:] + [u for u in dia if "HIST" not in u][-2:]:
-        loc = CACHE / u.rsplit("/", 1)[1]           # meses recentes: a CVM republica conforme os fundos entregam
-        try:
-            if loc.exists() and pd.Timestamp(requests.head(u, timeout=60).headers["Last-Modified"]).timestamp() > loc.stat().st_mtime:
-                loc.unlink()
-                for m in (cda.get(u) or dia.get(u)):
-                    for j in CACHE.glob(f"rec/*_{m}.json"):
-                        j.unlink()
-        except (requests.RequestException, KeyError, OSError):
-            pass
+    atualiza_publicacoes(cda, dia, log)
     tarefas = ([(processa_cda, u, ms) for u, ms in cda.items() if any(precisa("cda", m, cnpjs) for m in ms)]
                + [(processa_diario, u, ms) for u, ms in dia.items() if any(precisa("diario", m, cnpjs) for m in ms)])
 
@@ -228,8 +272,8 @@ def fund_cat(name):
             else "Cotas de Fundos")
 
 
-def lookthrough(nomes, meses):
-    """nomes: {nome: cnpj}. Uma linha por ativo final x caminho, com % do PL do peer e movimentacao do mes."""
+def carrega_pos(meses):
+    """Posicoes (so dos fundos recortados) + PL de todos, todos os meses, com a linha de ajuste carteira x PL."""
     pos = pd.concat([pd.read_parquet(CACHE / "rec" / f"cda_{m}.parquet").assign(mes=m) for m in meses], ignore_index=True)
     pl = pd.concat([pd.read_parquet(CACHE / "rec" / f"pl_{m}.parquet").assign(mes=m) for m in meses], ignore_index=True)
     pl = pl.drop_duplicates(["mes", "CNPJ_FUNDO_CLASSE"]).set_index(["mes", "CNPJ_FUNDO_CLASSE"]).VL_PATRIM_LIQ.astype(float)
@@ -242,6 +286,12 @@ def lookthrough(nomes, meses):
     aj = aj[(aj.v.abs() > 0.005 * aj.pl_fundo.abs())].reset_index().assign(
         TP_APLIC=AJUSTE, ativo="Diferença entre PL informado e soma da carteira (fonte CVM)")
     pos = pd.concat([pos, aj.drop(columns="soma")], ignore_index=True)
+    return pos, pl
+
+
+def lookthrough(nomes, meses, carga=None):
+    """nomes: {nome: cnpj}. Uma linha por ativo final x caminho, com % do PL do fundo e movimentacao do mes."""
+    pos, pl = carga or carrega_pos(meses)
     tem_cart = set(zip(pos.mes, pos.CNPJ_FUNDO_CLASSE))
     front = pd.DataFrame([dict(fundo=n, mes=m, veic=c, peso=1.0, caminho=n, cadeia=c)
                           for n, c in nomes.items() for m in meses if (m, c) in tem_cart])
@@ -348,20 +398,106 @@ def anbima_debentures():
     return hist[hist.data == hist.data.max()], hist
 
 
-def cdi_mensal(desde, diario=False):
-    cdi, hoje = [], pd.Timestamp.today()
-    for a in range(int(desde[:4]), hoje.year + 1, 9):         # API do BC: no maximo 10 anos por consulta
+def sgs(codigo, desde):
+    """Serie do Banco Central (SGS). Diarias: no maximo 10 anos por consulta."""
+    out, hoje = [], pd.Timestamp.today()
+    for a in range(int(desde[:4]), hoje.year + 1, 9):
         fim = min(pd.Timestamp(a + 8, 12, 31), hoje).strftime("%d/%m/%Y")
         for tent in range(5):
             try:
-                cdi += requests.get("https://api.bcb.gov.br/dados/serie/bcdata.sgs.12/dados", timeout=60,
+                out += requests.get(f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.{codigo}/dados", timeout=60,
                                     params={"formato": "json", "dataInicial": f"01/01/{a}", "dataFinal": fim}).json()
                 break
             except (requests.RequestException, ValueError):
                 time.sleep(5 * (tent + 1))
-    cdi = pd.DataFrame(cdi)
-    s = pd.Series(cdi.valor.astype(float).values / 100, index=pd.to_datetime(cdi.data, dayfirst=True))
+    d = pd.DataFrame(out)
+    return pd.Series(d.valor.astype(float).values, index=pd.to_datetime(d.data, dayfirst=True)).sort_index() if len(d) else pd.Series(dtype=float)
+
+
+def cdi_mensal(desde, diario=False):
+    s = sgs(12, desde) / 100
     return s if diario else (1 + s).groupby(s.index.strftime("%Y-%m")).prod() - 1
+
+
+def ipca_indice():
+    """Numero-indice do IPCA (IBGE/SIDRA), mensal. Usado no valor do contrato futuro DAP."""
+    f = CACHE / "ipca_indice.json"
+    if not f.exists() or f.stat().st_mtime < time.time() - 86400:
+        try:
+            r = requests.get("https://apisidra.ibge.gov.br/values/t/1737/n1/all/v/2266/p/all", timeout=120).json()
+            f.write_text(json.dumps({x["D3C"]: x["V"] for x in r[1:]}))
+        except (requests.RequestException, ValueError, KeyError):
+            if not f.exists():
+                return pd.Series(dtype=float)
+    d = json.loads(f.read_text())
+    s = pd.Series({f"{k[:4]}-{k[4:]}": float(v) for k, v in d.items() if v not in ("...", "-", "")})
+    return s.sort_index()
+
+
+def tesouro():
+    """Curvas do Tesouro Direto (gratuito, diario desde 2004): prefixado (LTN) e IPCA+ (NTN-B principal), taxa x prazo."""
+    f = CACHE / "tesouro_direto.csv"
+    if not f.exists() or f.stat().st_mtime < time.time() - 86400:
+        try:
+            r = requests.get("https://www.tesourotransparente.gov.br/ckan/dataset/df56aa42-484a-4a59-8184-7676580c81e3/"
+                             "resource/796d2059-14e9-44e3-80c9-2d9e30b405c1/download/PrecoTaxaTesouroDireto.csv", timeout=300)
+            r.raise_for_status()
+            f.write_bytes(r.content)
+        except requests.RequestException:
+            if not f.exists():
+                return {}
+    d = pd.read_csv(f, sep=";", decimal=",")
+    d = d[d["Tipo Titulo"].isin(["Tesouro Prefixado", "Tesouro IPCA+"])].copy()
+    d["data"] = pd.to_datetime(d["Data Base"], dayfirst=True)
+    d["anos"] = (pd.to_datetime(d["Data Vencimento"], dayfirst=True) - d.data).dt.days / 365.25
+    d["taxa"] = d[["Taxa Compra Manha", "Taxa Venda Manha"]].replace(0, np.nan).mean(axis=1)
+    d["tipo"] = np.where(d["Tipo Titulo"].eq("Tesouro Prefixado"), "PRE", "IPCA")
+    d = d.dropna(subset=["taxa"]).sort_values(["tipo", "data", "anos"])
+    out = {}
+    for t, g in d.groupby("tipo"):
+        por_dia = {k: (x.anos.values, x.taxa.values) for k, x in g.groupby("data")}
+        datas = sorted(por_dia)
+        out[t] = (np.array(datas, dtype="datetime64[ns]"), datas, por_dia)
+    return out
+
+
+def curva(curvas, tipo, dia, anos):
+    """Taxa (% a.a.) da curva `tipo` ("PRE" ou "IPCA") no ultimo dia util <= `dia`, interpolada no prazo `anos`."""
+    if tipo not in curvas:
+        return np.full(np.shape(anos), np.nan)
+    arr, datas, por_dia = curvas[tipo]
+    i = np.searchsorted(arr, np.datetime64(pd.Timestamp(dia)), side="right") - 1
+    if i < 0:
+        return np.full(np.shape(anos), np.nan)
+    x, y = por_dia[datas[i]]
+    return np.interp(np.clip(anos, x.min(), x.max()), x, y)
+
+
+def _sem_acento(t):
+    import unicodedata
+    return unicodedata.normalize("NFKD", str(t)).encode("ascii", "ignore").decode().upper()
+
+
+_GRUPOS_RE = [(re.compile(k), v) for k, v in GRUPOS.items()]
+_SUFIXOS = re.compile(r"(?<![\w.])(S\.A\.?|S/A|SA|LTDA|SPE|PARTICIPACOES|HOLDING|COMPANHIA|CIA|EMPREENDIMENTOS|E|DE|DO|DA|DOS|DAS|EM)(?![\w/])")
+
+
+def grupo(emissor, categoria=""):
+    """Grupo economico pelo nome do emissor (mapa GRUPOS); sem mapa, o proprio emissor sem sufixos."""
+    if categoria in ("Operações Compromissadas",):
+        return "Compromissadas"
+    if categoria == "Títulos Públicos":
+        return "Tesouro Nacional"
+    if categoria in ("Disponibilidades", "Valores a receber", "Valores a pagar", AJUSTE):
+        return "Caixa e outros"
+    if not isinstance(emissor, str) or not emissor.strip():
+        return None
+    n = _sem_acento(emissor)
+    for rx, g in _GRUPOS_RE:
+        if rx.search(n):
+            return g
+    base = " ".join(w for w in _SUFIXOS.sub(" ", n).split() if not w.isdigit())
+    return base.title()[:40] or emissor
 
 
 def diario(nomes, dia):
@@ -494,91 +630,40 @@ lt = sys.modules[__name__]          # o servidor chama as funcoes de dados como 
 
 # ====================================================================== servidor + pagina
 
-import hashlib
-import io
 import json
 import math
 import os
+import re
 import threading
-import unicodedata
-import uuid
-import zipfile
-from collections import OrderedDict
 from datetime import date
 
 import numpy as np
 import pandas as pd
-import requests
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 
-CORES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
-CINZA = "#898781"
-CONTABIL = r"(?i)pagar|receber|obriga|termo|disponibilidade|exigibilidade|swap|confidencial|ajuste"
-app = FastAPI(title="Painel de fundos CVM")
+app = FastAPI(title="Painel de fundos")
 
-JOBS, RESULTADOS, LOCK = {}, OrderedDict(), threading.Lock()
-CAD = {"df": None, "erro": None}
-
-
-# ------------------------------------------------------------------ cadastro (busca por nome/CNPJ)
-def _sem_acento(s):
-    return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().upper()
-
-
-def carrega_cadastro():
-    try:
-        r = requests.get("https://dados.cvm.gov.br/dados/FI/CAD/DADOS/registro_fundo_classe.zip", timeout=300)
-        z = zipfile.ZipFile(io.BytesIO(r.content))
-        c = pd.read_csv(z.open("registro_classe.csv"), sep=";", encoding="latin1", dtype=str, quoting=3,
-                        usecols=["CNPJ_Classe", "Denominacao_Social", "Situacao"])
-        c.columns = ["cnpj", "nome", "situacao"]
-        a = pd.read_csv("https://dados.cvm.gov.br/dados/FI/CAD/DADOS/cad_fi.csv", sep=";", encoding="latin1", dtype=str,
-                        quoting=3, usecols=["CNPJ_FUNDO", "DENOM_SOCIAL", "SIT"])
-        a.columns = ["cnpj", "nome", "situacao"]
-        c = pd.concat([c, a]).dropna(subset=["cnpj", "nome"])
-        c["cnpj"] = c.cnpj.map(lt.fmt)
-        c["ativo"] = ~c.situacao.fillna("").str.upper().str.contains("CANCEL")
-        c = c.sort_values("ativo", ascending=False).drop_duplicates("cnpj")
-        c["chave"] = c.nome.map(_sem_acento) + " " + c.cnpj.str.replace(r"\D", "", regex=True)
-        CAD["df"] = c.reset_index(drop=True)
-    except Exception as e:                                  # sem cadastro a busca por CNPJ continua funcionando
-        CAD["erro"] = f"{type(e).__name__}: {e}"
+CAT_CORES = ["#2a78d6", "#1baf7a", "#eda100", "#e87ba4", "#4a3aa7", "#008300", "#e34948", "#7ba7d9"]
+NOSSAS_CORES = ["#eb6834", "#c24f1d", "#f29a6b", "#a8401a", "#f5b38d"]
+GENERICO = (r"(?i)\b(FUNDO DE INVESTIMENTO|FUNDO|EM DIREITOS CREDIT[OÓ]RIOS|DE INVESTIMENTO|FIDC|FIC|FI|COTAS|MULTIMERCADO|"
+            r"RENDA FIXA|CR[EÉ]DITO PRIVADO|RESPONSABILIDADE LIMITADA|RESP LTDA|N[AÃ]O PADRONIZADO|NP|LONGO PRAZO|LP)\b")
+METODO = 5                                     # suba quando mudar o calculo -> refaz o cache do dia
+CAIXA = ("Caixa e provisões", "Operações Compromissadas")
+CREDITO = ("Debêntures", "Títulos de Crédito Privado", "Títulos ligados ao agronegócio",
+           "Outros valores mobiliários registrados na CVM objeto de oferta pública", "Investimento no Exterior", "Outras aplicações")
+MESES_COD = "FGHJKMNQUVXZ"
+PRE = {"status": "parado", "log": [], "erro": None, "pasta": None}
 
 
-
-
-@app.get("/api/busca")
-def busca(q: str = ""):
-    q = q.strip()
-    dig = "".join(ch for ch in q if ch.isdigit())
-    c = CAD["df"]
-    if c is None:
-        return [{"cnpj": lt.fmt(dig), "nome": "(cadastro carregando) " + lt.fmt(dig), "ativo": True}] if len(dig) == 14 else []
-    if len(q) < 2:
-        return []
-    toks = _sem_acento(q).split()
-    m = pd.Series(True, index=c.index)
-    for t in toks:
-        m &= c.chave.str.contains(t, regex=False)
-    r = c[m].head(25)
-    return [{"cnpj": x.cnpj, "nome": x.nome, "ativo": bool(x.ativo)} for x in r.itertuples()]
-
-
-@app.get("/api/padrao")
-def padrao():
-    nomes = dict(zip(CAD["df"].cnpj, CAD["df"].nome)) if CAD["df"] is not None else {}
-    return [{"cnpj": lt.cnpj_of(x), "nome": nomes.get(lt.cnpj_of(x), n), "curto": n} for n, x in lt.PEERS.items()]
-
-
-# ------------------------------------------------------------------ helpers de serializacao
+# ------------------------------------------------------------------ utilidades
 def limpo(o):
     if isinstance(o, dict):
         return {str(k): limpo(v) for k, v in o.items()}
     if isinstance(o, (list, tuple)):
         return [limpo(v) for v in o]
-    if isinstance(o, (np.integer,)):
+    if isinstance(o, np.integer):
         return int(o)
     if isinstance(o, (np.floating, float)):
         return None if (math.isnan(o) or math.isinf(o)) else round(float(o), 6)
@@ -592,249 +677,362 @@ def limpo(o):
         return o
 
 
-def registros(df, cols=None):
-    df = df if cols is None else df[cols]
-    return [dict(zip(df.columns, r)) for r in df.itertuples(index=False)]
+def wavg(v, w):
+    v, w = np.asarray(v, float), np.asarray(w, float)
+    ok = ~np.isnan(v) & (w > 0)
+    return float(np.average(v[ok], weights=w[ok])) if ok.any() else None
 
 
-def wavg(x, col, w="perc_pl"):
-    ok = x[col].notna() & x[w].gt(0)
-    return float(np.average(x.loc[ok, col], weights=x.loc[ok, w])) if ok.any() else None
+def fim_mes(m):
+    return pd.Timestamp(m) + pd.offsets.MonthEnd(0)
 
 
-def curto(nome):
-    n = nome.upper()
-    for a, b in [("FUNDO DE INVESTIMENTO FINANCEIRO", "FIF"), ("FUNDO DE INVESTIMENTO EM COTAS DE FUNDOS DE INVESTIMENTO", "FIC FI"),
-                 ("FUNDO DE INVESTIMENTO", "FI"), ("MULTIMERCADO", "MM"), ("CRÉDITO PRIVADO", "CP"), ("RENDA FIXA", "RF"),
-                 ("RESPONSABILIDADE LIMITADA", "RL"), ("RESP LIMITADA", "RL"), ("LONGO PRAZO", "LP")]:
-        n = n.replace(a, b)
-    return n[:30].strip()
+def contrato(texto):
+    """Tipo, vencimento (ano, mes) de um futuro a partir do codigo/descricao da CDA (ex.: DI1FUTF29, FUT DAP/Q30)."""
+    t = lt._sem_acento(texto)
+    tipo = ("DAP" if re.search(r"DAP|CUPOM DE IPCA|DI X IPCA", t) else "DI1" if re.search(r"DI1|DI DE 1 DIA", t)
+            else "WDO" if "WDO" in t else "DOL" if re.search(r"DOL|DOLAR", t) else "DDI" if re.search(r"DDI|FRC|CUPOM CAMBIAL", t)
+            else "IND" if re.search(r"\bIND|WIN|IBOV", t) else "OUTRO")
+    m = re.search(r"(?:DI1|DAP|DOL|WDO|DDI|FRC|IND|WIN)\s*(?:FUT)?\s*/?\s*([FGHJKMNQUVXZ])(\d{2})\b", t)
+    return tipo, ((2000 + int(m.group(2)), MESES_COD.index(m.group(1)) + 1) if m else None)
 
 
-# ------------------------------------------------------------------ montagem de tudo que o painel mostra
-def monta(fundos, desde, log):
-    """fundos: lista de (nome curto, cnpj). Devolve um dicionario JSON com todas as abas."""
-    workers = max(1, min(4, (os.cpu_count() or 2)))
-    meses, dia = lt.prepara(sorted(c for _, c in fundos), desde, workers=workers, log=log)
-    nomes = dict(fundos)
-    ordem = [n for n, _ in fundos]
-    log("Montando look-through e indicadores...")
-    df = lt.lookthrough(nomes, meses) if meses else pd.DataFrame()
-    d = lt.diario(nomes, dia)
-    cdi = lt.cdi_mensal(desde, diario=True)
-    cdi_m = (1 + cdi).groupby(cdi.index.strftime("%Y-%m")).prod() - 1
-    an_u, an_h = lt.anbima_debentures()
-    out = {"meta": {"desde": desde, "fundos": [{"nome": n, "cnpj": c, "cor": CORES[i % 8]} for i, (n, c) in enumerate(fundos)],
-                    "gerado": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"),
-                    "ult_carteira": max(meses) if meses else None,
-                    "ult_cota": d.data.max().strftime("%Y-%m-%d") if len(d) else None,
-                    "anbima_data": an_u.data.iloc[0].strftime("%Y-%m-%d") if len(an_u) else None,
-                    "anbima_dias": int(an_h.data.nunique()) if len(an_h) else 0}}
+# ------------------------------------------------------------------ calculo por fundo
+class Contexto:
+    """Dados de mercado compartilhados por todos os fundos."""
 
-    cart = df[~df.derivativo] if len(df) else df
-    ult_mes = cart.groupby("fundo").mes.max() if len(cart) else pd.Series(dtype=str)
-    ult = cart[cart.mes == cart.fundo.map(ult_mes)] if len(cart) else cart
-    aberto = lt.mes_aberto(df) if len(df) else pd.Series(dtype=str)
-    media = (cart[~cart.categoria.str.contains(CONTABIL)].groupby(["fundo", "mes", "categoria"]).perc_pl.sum()
-             .groupby("categoria").mean().sort_values(ascending=False)) if len(cart) else pd.Series(dtype=float)
-    top_cat = media.index[:7].tolist()
-    out["categorias"] = {c: CORES[i] for i, c in enumerate(top_cat)} | {"Outros": CINZA}
-    cat7 = lambda s: s.where(s.isin(top_cat), "Outros")
-    rent = lt.rentabilidade(d, cdi_m) if len(d) else pd.DataFrame(columns=["fundo", "mes", "retorno", "cdi", "pct_cdi"])
+    def __init__(self, log):
+        log("Baixando curvas (Tesouro Direto), IPCA (IBGE), PTAX e CDI (Banco Central) e marcação ANBIMA...")
+        self.curvas = lt.tesouro()
+        self.ipca = lt.ipca_indice()
+        self.ptax = lt.sgs(1, lt.DESDE)
+        self.cdi_d = lt.cdi_mensal(lt.DESDE, diario=True)
+        self.cdi_m = (1 + self.cdi_d).groupby(self.cdi_d.index.strftime("%Y-%m")).prod() - 1
+        self.an_u, self.an_h = lt.anbima_debentures()
+        self.an_dias = sorted(self.an_h.data.unique()) if len(self.an_h) else []
 
-    # ---- cotas, KPIs
-    kp, cotas = [], {}
-    for f in ordem:
-        x = d[d.fundo == f]
-        q = x.set_index("data").VL_QUOTA.dropna()
-        if q.empty:
-            continue
-        fim = q.index[-1]
-        ini = q[q.index <= fim - pd.Timedelta(days=365)]
-        base = ini.index[-1] if len(ini) else q.index[0]
-        r12, c12 = q.iloc[-1] / q[base] - 1, (1 + cdi[(cdi.index > base) & (cdi.index <= fim)]).prod() - 1
-        ano = q[q.index < pd.Timestamp(fim.year, 1, 1)]
-        u = ult[ult.fundo == f]
-        x12 = x[x.data > base]
-        kp.append({"fundo": f, "pl_mi": x.VL_PATRIM_LIQ.iloc[-1] / 1e6, "ret12": r12 * 100, "pct_cdi12": r12 / c12 * 100 if c12 else None,
-                   "ret_ano": (q.iloc[-1] / ano.iloc[-1] - 1) * 100 if len(ano) else None,
-                   "vol": q[q.index > base].pct_change().std() * np.sqrt(252) * 100, "dd": (q / q.cummax() - 1).min() * 100,
-                   "capt12_mi": (x12.CAPTC_DIA.sum() - x12.RESG_DIA.sum()) / 1e6, "cotistas": x.NR_COTST.iloc[-1],
-                   "ativos": u.chave.nunique() if len(u) else None,
-                   "top10_emissores": u.groupby("emissor").perc_pl.sum().nlargest(10).sum() if len(u) else None,
-                   "ult_carteira": ult_mes.get(f), "carteira_aberta": aberto.get(f), "ult_cota": fim.strftime("%Y-%m-%d")})
-        cotas[f] = {"datas": [t.strftime("%Y-%m-%d") for t in q.index], "acum": ((q / q.iloc[0] - 1) * 100).tolist(),
-                    "dd": ((q / q.cummax() - 1) * 100).tolist(), "pl": (x.set_index("data").VL_PATRIM_LIQ / 1e6).reindex(q.index).tolist(),
-                    "cotistas": x.set_index("data").NR_COTST.reindex(q.index).tolist()}
-    out["kpis"], out["cotas"] = kp, cotas
-    c0 = cdi[cdi.index >= d.data.min()] if len(d) else cdi.iloc[:0]
-    out["cdi"] = {"datas": [t.strftime("%Y-%m-%d") for t in c0.index], "acum": (((1 + c0).cumprod() - 1) * 100).tolist()}
-    cap = d.groupby(["fundo", "mes"]).apply(lambda x: (x.CAPTC_DIA.sum() - x.RESG_DIA.sum()) / 1e6, include_groups=False).rename("capt_mi")
-    out["mensal"] = registros(rent.join(cap, on=["fundo", "mes"])[["fundo", "mes", "retorno", "cdi", "pct_cdi", "capt_mi"]]) if len(rent) else []
+    def cdi_aa(self, m):
+        x = self.cdi_d[self.cdi_d.index <= fim_mes(m)]
+        return float(((1 + x.iloc[-1]) ** 252 - 1) * 100) if len(x) else np.nan
 
-    # ---- por fundo: alocacao, carteira, credito, movimentos, derivativos, marcacao
-    por = {}
-    for f in [f for f in ordem if f in set(cart.fundo)] if len(cart) else []:
-        g, gd = cart[cart.fundo == f], df[df.fundo == f]
-        u = ult[ult.fundo == f]
-        ev = g.assign(c=cat7(g.categoria)).pivot_table(index="mes", columns="c", values="perc_pl", aggfunc="sum", fill_value=0)
-        p = {"ult_mes": ult_mes.get(f), "mes_aberto": aberto.get(f),
-             "alocacao": {"meses": ev.index.tolist(), "series": {c: ev[c].tolist() for c in top_cat + ["Outros"] if c in ev}},
-             "emissores": registros(u.groupby("emissor").perc_pl.sum().nlargest(15).reset_index())}
-        cp = (u.groupby(["categoria", "ativo", "codigo", "emissor"], dropna=False)
-              .agg(perc_pl=("perc_pl", "sum"), veiculo=("veiculo", "first")).reset_index().sort_values("perc_pl", ascending=False))
-        p["carteira"] = registros(cp)
+    def ptax_em(self, m):
+        x = self.ptax[self.ptax.index <= fim_mes(m)]
+        return float(x.iloc[-1]) if len(x) else np.nan
 
-        # credito (ultima carteira aberta) + ANBIMA
-        ma = aberto.get(f, ult_mes.get(f))
-        ua = g[g.mes == ma]
-        deb = ua[ua.categoria.eq("Debêntures")]
-        cols = ["codigo", "indice", "tipo", "taxa_ind", "duration_anos", "pct_par", "venc"]
-        deb = deb.merge(an_u[cols], on="codigo", how="left") if len(an_u) else deb.assign(**{c: np.nan for c in cols[1:]})
-        com = deb[deb.taxa_ind.notna()]
-        hist = {}
-        if len(an_h) and an_h.data.nunique() > 1 and len(com):
-            evh = deb[["codigo", "perc_pl"]].merge(an_h[["data", "codigo", "tipo", "taxa_ind", "duration_anos"]], on="codigo")
-            s1 = evh[evh.tipo == "DI +"].groupby("data").apply(lambda x: wavg(x, "taxa_ind"), include_groups=False)
-            s2 = evh.groupby("data").apply(lambda x: wavg(x, "duration_anos"), include_groups=False)
-            hist = {"datas": [t.strftime("%Y-%m-%d") for t in s2.index], "spread_di": s1.reindex(s2.index).tolist(), "duration": s2.tolist()}
-        o = ua[~ua.categoria.str.contains(CONTABIL)].copy()
-        venc = pd.to_datetime(o.vencimento, errors="coerce")
-        o["prazo"] = (venc - (pd.to_datetime(o.mes) + pd.offsets.MonthEnd(0))).dt.days / 365.25
-        faixa = pd.cut(o.prazo, [-1, 1, 2, 3, 5, 100], labels=["até 1a", "1-2a", "2-3a", "3-5a", "5a+"]).astype(str).replace("nan", "s/ venc.")
-        resumo = o.groupby("categoria").apply(lambda x: pd.Series({
-            "perc_pl": x.perc_pl.sum(), "perc_com_taxa": x[x.pct_indexador.notna() | x.cupom.notna() | x.taxa_pre.notna()].perc_pl.sum(),
-            "pct_indexador": wavg(x, "pct_indexador"), "cupom": wavg(x, "cupom"), "taxa_pre": wavg(x, "taxa_pre"),
-            "prazo": wavg(x, "prazo")}), include_groups=False).reset_index().sort_values("perc_pl", ascending=False)
-        p["credito"] = {
-            "mes": ma, "deb_pl": deb.perc_pl.sum(), "cobertura": com.perc_pl.sum() / deb.perc_pl.sum() * 100 if deb.perc_pl.sum() else None,
-            "spread_di": wavg(com[com.tipo == "DI +"], "taxa_ind"), "pl_di": com[com.tipo == "DI +"].perc_pl.sum(),
-            "taxa_ipca": wavg(com[com.tipo == "IPCA +"], "taxa_ind"), "pl_ipca": com[com.tipo == "IPCA +"].perc_pl.sum(),
-            "duration": wavg(com, "duration_anos"),
-            "por_tipo": registros(deb.assign(t=deb.tipo.fillna("sem taxa ANBIMA")).groupby("t").perc_pl.sum().reset_index()),
-            "debs": registros(deb.sort_values("perc_pl", ascending=False),
-                              ["ativo", "codigo", "perc_pl", "indice", "tipo", "taxa_ind", "duration_anos", "pct_par", "venc", "veiculo"]),
-            "hist": hist,
-            "indexador": registros(o.groupby(o.indexador.fillna("não informado na CDA")).perc_pl.sum().reset_index().rename(columns={"indexador": "k"})),
-            "prazo": registros(o.groupby(faixa).perc_pl.sum().reindex(["até 1a", "1-2a", "2-3a", "3-5a", "5a+", "s/ venc."]).fillna(0)
-                               .rename_axis("k").reset_index()),
-            "rating": registros(o.groupby(o.rating.fillna("sem rating")).perc_pl.sum().rename_axis("k").reset_index()),
-            "resumo": registros(resumo)}
+    def anbima_mes(self, m, recentes):
+        """Marcacao ANBIMA para a carteira do mes: o dia guardado mais proximo do fim do mes (ate 10 dias);
+        nos meses mais recentes, o ultimo dia disponivel."""
+        if not self.an_dias:
+            return None, None
+        alvo = fim_mes(m)
+        perto = [d for d in self.an_dias if abs((pd.Timestamp(d) - alvo).days) <= 10]
+        d = min(perto, key=lambda d: abs((pd.Timestamp(d) - alvo).days)) if perto else (self.an_dias[-1] if m in recentes else None)
+        return (d, self.an_h[self.an_h.data == d].drop_duplicates("codigo").set_index("codigo")) if d is not None else (None, None)
 
-        # movimentacoes
-        giro = g.groupby("mes").agg(c=("compra_pct", "sum"), v=("venda_pct", "sum"))
-        ms = sorted(g.mes.unique())
-        mv = {}
-        for i, m in enumerate(ms):
-            x = g[g.mes == m].groupby(["ativo", "categoria"]).agg(compra=("compra_pct", "sum"), venda=("venda_pct", "sum")).reset_index()
-            e = {"compras": registros(x.nlargest(15, "compra")[["ativo", "categoria", "compra"]]),
-                 "vendas": registros(x.nlargest(15, "venda")[["ativo", "categoria", "venda"]])}
-            if i:
-                a, b = set(g[g.mes == ms[i - 1]].chave), set(g[g.mes == m].chave)
-                e |= {"novos": len(b - a), "pct_novos": g[(g.mes == m) & g.chave.isin(b - a)].perc_pl.sum(),
-                      "zerados": len(a - b), "pct_zerados": g[(g.mes == ms[i - 1]) & g.chave.isin(a - b)].perc_pl.sum()}
-            mv[m] = e
-        p["movimentos"] = {"meses": giro.index.tolist(), "compras": giro.c.tolist(), "vendas": giro.v.tolist(), "por_mes": mv}
 
-        # derivativos e moeda
-        dv = gd[gd.derivativo]
-        t = dv.pivot_table(index="mes", columns="tipo_ativo", values="perc_pl", aggfunc="sum", fill_value=0) if len(dv) else pd.DataFrame()
-        fx = pd.DataFrame({"exterior": gd[gd.categoria.eq("Investimento no Exterior")].groupby("mes").perc_pl.sum(),
-                           "dolar": dv[dv.tipo_ativo.fillna("").str.contains("(?i)dol|dólar")].groupby("mes").perc_pl.sum()}).fillna(0)
-        p["derivativos"] = {"meses": t.index.tolist(), "series": {c: t[c].tolist() for c in t.columns},
-                            "atual": registros(dv[dv.mes == dv.mes.max()].groupby(["categoria", "tipo_ativo", "ativo", "veiculo"])
-                                               .perc_pl.sum().reset_index().sort_values("perc_pl")) if len(dv) else [],
-                            "moeda": {"meses": fx.index.tolist(), "exterior": fx.exterior.tolist(), "dolar": fx.dolar.tolist()}}
+def enriquece(g, m, ctx, recentes):
+    """Spread sobre o CDI (% a.a., equivalente) e duration (anos) de cada linha da carteira do mes."""
+    g = g.copy()
+    anos = ((pd.to_datetime(g.vencimento, errors="coerce") - fim_mes(m)).dt.days / 365.25).clip(lower=0)
+    cdi = ctx.cdi_aa(m)
+    sp, du = pd.Series(np.nan, index=g.index), pd.Series(np.nan, index=g.index)
+    idx = g.indexador.fillna("")
+    cup = g.cupom.where(g.cupom.fillna(0) != 0)
+    pct_i = g.pct_indexador
+    # informado na CDA (depositos bancarios, credito privado)
+    di = idx.str.contains("DI de um dia|Selic")
+    sp[di] = cup[di].fillna((pct_i[di] - 100) / 100 * cdi)
+    du[di] = anos[di]
+    ip = idx.str.contains("IPCA")
+    sp[ip] = cup[ip] - lt.curva(ctx.curvas, "IPCA", fim_mes(m), anos[ip].fillna(3).values)
+    du[ip] = anos[ip]
+    pr = idx.str.contains("prefixada")
+    sp[pr] = g.taxa_pre[pr].fillna(cup[pr]) - lt.curva(ctx.curvas, "PRE", fim_mes(m), anos[pr].fillna(1).values)
+    du[pr] = anos[pr]
+    # titulos publicos e caixa
+    tp = g.categoria.eq("Títulos Públicos")
+    lft = tp & g.ativo.str.contains("FINANCEIRAS DO TESOURO|LFT", na=False)
+    sp[tp], du[tp] = 0.0, anos[tp]
+    du[lft] = 0.0
+    cx = g.categoria.isin(CAIXA)
+    sp[cx], du[cx] = 0.0, 0.0
+    # debentures: marcacao ANBIMA
+    dia, an = ctx.anbima_mes(m, recentes)
+    deb = g.categoria.eq("Debêntures") & g.codigo.notna()
+    if an is not None and deb.any():
+        a = an.reindex(g.codigo[deb])
+        tx, tipo, dur = a.taxa_ind.values, a.tipo.values, a.duration_anos.values
+        s = np.where(tipo == "DI +", tx, np.where(tipo == "% do DI", (tx - 100) / 100 * cdi, np.nan))
+        real = np.isin(tipo, ["IPCA +", "IGP-M +"])
+        s = np.where(real, tx - lt.curva(ctx.curvas, "IPCA", pd.Timestamp(dia), np.nan_to_num(dur, nan=3)), s)
+        pre = tipo == "Outros"
+        s = np.where(pre, tx - lt.curva(ctx.curvas, "PRE", pd.Timestamp(dia), np.nan_to_num(dur, nan=2)), s)
+        sp[deb], du[deb] = s, dur
+    g["spread"], g["duration"] = sp, du
+    tipo_an = g.codigo.map(ctx.an_u.drop_duplicates("codigo").set_index("codigo").tipo) if len(ctx.an_u) else pd.Series(np.nan, index=g.index)
+    g["ipca"] = tipo_an.isin(["IPCA +", "IGP-M +"]) | ip | g.ativo.str.contains("SERIE B|NTN-B", na=False)
+    g["pre"] = (tipo_an.eq("Outros") & g.categoria.eq("Debêntures")) | pr | (tp & g.ativo.str.contains(r"LETRAS DO TESOURO NACIONAL|SERIE F|LTN|NTN-F", na=False) & ~lft)
+    g["usd"] = g.categoria.eq("Investimento no Exterior") | idx.str.contains("Dólar")
+    return g, dia
 
-        # marcacao estimada
-        k = lt.contribuicao(g)
-        if len(k):
-            cc = k.assign(c=cat7(k.categoria)).pivot_table(index="mes", columns="c", values="resultado_pct", aggfunc="sum", fill_value=0)
-            rr = rent[rent.fundo == f].set_index("mes").retorno.reindex(cc.index) * 100
-            pm = {}
-            for m in cc.index:
-                km = k[k.mes == m].groupby(["ativo", "categoria"]).resultado_pct.sum().reset_index()
-                pm[m] = {"altas": registros(km.nlargest(12, "resultado_pct")), "quedas": registros(km.nsmallest(12, "resultado_pct"))}
-            tot = k.groupby(["ativo", "categoria"]).resultado_pct.sum().reset_index()
-            p["marcacao"] = {"meses": cc.index.tolist(), "series": {c: cc[c].tolist() for c in top_cat + ["Outros"] if c in cc},
-                             "real": rr.tolist(), "por_mes": pm, "periodo": {"altas": registros(tot.nlargest(15, "resultado_pct")),
-                                                                            "quedas": registros(tot.nsmallest(15, "resultado_pct"))}}
-        por[f] = p
-    out["por_fundo"] = por
 
-    # ---- comparacao
-    if len(ult):
-        pv = ult.pivot_table(index="categoria", columns="fundo", values="perc_pl", aggfunc="sum", fill_value=0)
-        pv = pv.reindex(columns=[f for f in ordem if f in pv.columns])
-        pv = pv.loc[pv.abs().max(axis=1).sort_values(ascending=False).index]
-        e = ult.groupby(["fundo", "emissor"]).perc_pl.sum()
-        comum = e.groupby(level=1).filter(lambda s: len(s) > 1).unstack(0).fillna(0)
-        comum = comum.loc[comum.sum(axis=1).sort_values(ascending=False).index].head(30) if len(comum) else comum
-        out["comparacao"] = {"alocacao": {"fundos": pv.columns.tolist(), "linhas": [[i] + r.tolist() for i, r in pv.iterrows()]},
-                             "emissores": {"fundos": comum.columns.tolist(), "linhas": [[i] + r.tolist() for i, r in comum.iterrows()]}}
+def derivativos_mes(gd, m, ctx, dur_ipca, dur_pre):
+    """Contratos futuros do mes: tipo, lado, contratos, prazo e nocional estimado (R$)."""
+    out = []
+    for r in gd.itertuples():
+        tipo, venc = contrato(f"{r.codigo or ''} {r.ativo or ''} {r.tipo_ativo or ''}")
+        if "mercado futuro" not in str(r.categoria).lower():   # termo/opcao/swap: sem P&L de futuro
+            tipo, venc = "OUTRO", None
+        lado = -1 if "vendida" in str(r.categoria).lower() else 1
+        n = abs(r.quantidade) if pd.notna(r.quantidade) else np.nan
+        if venc:
+            anos = max((pd.Timestamp(venc[0], venc[1], 15 if tipo == "DAP" else 1) - fim_mes(m)).days / 365.25, 1 / 252)
+        else:
+            anos = dur_ipca if tipo == "DAP" else dur_pre if tipo == "DI1" else 1.0
+        out.append(dict(i=r.Index, tipo=tipo, lado=lado, n=n, anos=anos, fator=r.fator, categoria=r.categoria,
+                        ativo=r.ativo, perc_cda=r.perc_pl))
+    return out
+
+
+def valor_ponto(tipo, m, ctx):
+    if tipo == "DI1":
+        return 1.0
+    if tipo == "DAP":
+        x = ctx.ipca[ctx.ipca.index <= m]
+        return 0.00025 * float(x.iloc[-1]) if len(x) else np.nan
+    return np.nan
+
+
+def pu(tipo, m, anos, ctx):
+    t = "PRE" if tipo == "DI1" else "IPCA"
+    y = float(lt.curva(ctx.curvas, t, fim_mes(m), np.array([anos]))[0])
+    return 1e5 / (1 + y / 100) ** anos
+
+
+def nocional(c, m, ctx, pl_fundo):
+    if c["tipo"] in ("DI1", "DAP") and pd.notna(c["n"]):
+        return c["lado"] * c["n"] * pu(c["tipo"], m, c["anos"], ctx) * valor_ponto(c["tipo"], m, ctx)
+    if c["tipo"] in ("DOL", "WDO") and pd.notna(c["n"]):
+        return c["lado"] * c["n"] * (50000 if c["tipo"] == "DOL" else 10000) * ctx.ptax_em(m)
+    return c["perc_cda"] / 100 * pl_fundo if pd.notna(c["perc_cda"]) else np.nan
+
+
+def pnl_futuro(c, p, m, ctx):
+    """P&L estimado (R$) do contrato entre o fim do mes p e o fim do mes m, com a posicao de p."""
+    if pd.isna(c["n"]):
+        return 0.0
+    cdi = float(ctx.cdi_m.get(m, 0.0))
+    if c["tipo"] in ("DI1", "DAP"):
+        a1 = max(c["anos"] - (fim_mes(m) - fim_mes(p)).days / 365.25, 1 / 252)
+        pu0, pu1 = pu(c["tipo"], p, c["anos"], ctx), pu(c["tipo"], m, a1, ctx)
+        if c["tipo"] == "DI1":
+            return c["lado"] * c["n"] * (pu1 - pu0 * (1 + cdi))
+        i0, i1 = ctx.ipca[ctx.ipca.index <= p], ctx.ipca[ctx.ipca.index <= m]
+        inf = float(i1.iloc[-1] / i0.iloc[-1] - 1) if len(i0) and len(i1) else 0.0
+        return c["lado"] * c["n"] * valor_ponto("DAP", m, ctx) * (pu1 - pu0 * (1 + cdi) / (1 + inf))
+    if c["tipo"] in ("DOL", "WDO"):
+        return c["lado"] * c["n"] * (50000 if c["tipo"] == "DOL" else 10000) * (ctx.ptax_em(m) - ctx.ptax_em(p))
+    return 0.0
+
+
+def detalhe(nome, cnpj, df, ctx, pl, rent):
+    """Tudo que as abas Carteira e Retorno mostram para um fundo."""
+    df = df.copy()
+    if ctx.an_h is not None and len(ctx.an_h):         # debenture sem emissor na CDA: nome do emissor pela ANBIMA
+        df["emissor"] = df.emissor.fillna(df.codigo.map(ctx.an_h.drop_duplicates("codigo", keep="last").set_index("codigo").nome))
+    emis = df[["emissor", "categoria"]].drop_duplicates()
+    gmap = {(e, c): lt.grupo(e, c) for e, c in zip(emis.emissor, emis.categoria)}
+    df["grupo"] = [gmap[(e, c)] for e, c in zip(df.emissor, df.categoria)]
+    curto = df.ativo.str.replace(GENERICO, " ", regex=True).str.replace(r"\s+", " ", regex=True).str.strip().str.slice(0, 40)
+    df["grupo"] = df.grupo.fillna(curto)
+    contabil = df.categoria.isin(["Disponibilidades", "Valores a receber", "Valores a pagar", lt.AJUSTE]) | (
+        df.categoria.str.contains(lt.PASSIVO, na=False) & ~df.derivativo)
+    df["categoria"] = df.categoria.mask(contabil, "Caixa e provisões")   # linhas contabeis numa so categoria
+    meses = sorted(df.mes.unique())
+    recentes = set(meses[-4:])
+    pl_f = {m: float(pl.get((m, cnpj), np.nan)) for m in meses}
+    cart_meses, ricos = [], {}
+    for m in meses:
+        g = df[df.mes == m]
+        nd, gd = g[~g.derivativo], g[g.derivativo]
+        e, dia = enriquece(nd, m, ctx, recentes)
+        ricos[m] = (e, gd)
+        e["fin"] = e.perc_pl / 100 * pl_f[m] / 1e6
+        cats = []
+        for c, x in e.groupby("categoria"):
+            com = x.spread.notna() & x.perc_pl.gt(0)
+            cats.append({"categoria": c, "perc": x.perc_pl.sum(), "fin": x.fin.sum(), "spread": wavg(x.spread, x.perc_pl),
+                         "duration": wavg(x.duration, x.perc_pl), "cobertura": x.perc_pl[com].sum() / x.perc_pl[x.perc_pl > 0].sum() * 100
+                         if x.perc_pl.gt(0).any() else None})
+        cats.sort(key=lambda r: -r["perc"])
+        total = {"categoria": "Total", "perc": e.perc_pl.sum(), "fin": e.fin.sum(), "spread": wavg(e.spread, e.perc_pl),
+                 "duration": wavg(e.duration, e.perc_pl)}
+        ip = e[e.ipca & e.perc_pl.gt(0)]
+        dur_ipca = wavg(ip.duration, ip.perc_pl) or 3.0
+        pr = e[e.pre & e.perc_pl.gt(0)]
+        dur_pre = wavg(pr.duration, pr.perc_pl) or 1.0
+        der = []
+        for c in derivativos_mes(gd, m, ctx, dur_ipca, dur_pre):
+            v = nocional(c, m, ctx, pl_f[m])
+            der.append({"contrato": c["tipo"] if c["tipo"] != "OUTRO" else (c["ativo"] or c["categoria"])[:40],
+                        "lado": "comprado" if c["lado"] > 0 else "vendido", "contratos": c["n"], "fin": v / 1e6 if pd.notna(v) else None,
+                        "prazo": c["anos"]})
+        dd = pd.DataFrame(der)
+        if len(dd):
+            dd = dd.groupby(["contrato", "lado"], dropna=False).agg(contratos=("contratos", "sum"), fin=("fin", "sum"),
+                                                                     prazo=("prazo", "mean")).reset_index()
+        x = e[(e.perc_pl > 0) & ~e.categoria.isin(CAIXA + ("Valores a receber", "Valores a pagar", lt.AJUSTE))]
+        x = x.assign(sw=(x.spread * x.perc_pl).fillna(0), sp=x.perc_pl.where(x.spread.notna(), 0),
+                     dw=(x.duration * x.perc_pl).fillna(0), dp=x.perc_pl.where(x.duration.notna(), 0))
+        top = (x.groupby(["ativo", "codigo"], dropna=False)
+               .agg(grupo=("grupo", "first"), categoria=("categoria", "first"), perc=("perc_pl", "sum"), sw=("sw", "sum"),
+                    sp=("sp", "sum"), dw=("dw", "sum"), dp=("dp", "sum")).reset_index().nlargest(10, "perc"))
+        top["spread"] = (top.sw / top.sp).where(top.sp > 0)
+        top["duration"] = (top.dw / top.dp).where(top.dp > 0)
+        top = top.drop(columns=["sw", "sp", "dw", "dp"])
+        gr = x.groupby("grupo").perc_pl.sum().nlargest(10).reset_index()
+        cart_meses.append({"mes": m, "pl_mm": pl_f[m] / 1e6, "anbima": dia, "conf": e[e.confidencial].perc_pl.sum(),
+                           "cats": cats, "total": total, "deriv": dd.to_dict("records") if len(dd) else [],
+                           "top": top.to_dict("records"), "grupos": gr.rename(columns={"perc_pl": "perc"}).to_dict("records")})
+
+    # ---- atribuicao mensal (retorno por categoria, hedges alocados nos ativos protegidos)
+    real = rent[rent.fundo == nome].set_index("mes").retorno
+    k = lt.contribuicao(df)
+    if len(k):                                   # variacao do preco unitario de cada posicao mantida (v/qt)
+        k = k[(k.qt > 0) & (k.qt_ant > 0) & (k.v_ant > 0)]
+        k = k.assign(rp=(k.v / k.qt) / (k.v_ant / k.qt_ant) - 1)
+        preco = k.groupby(["mes", "chave"]).rp.first()
     else:
-        out["comparacao"] = {"alocacao": {"fundos": [], "linhas": []}, "emissores": {"fundos": [], "linhas": []}}
-    RESULTADOS_DF[_chave(fundos, desde)] = (df, d)
-    while len(RESULTADOS_DF) > 6:
-        RESULTADOS_DF.pop(next(iter(RESULTADOS_DF)))
-    log("Pronto.")
-    return limpo(out)
+        preco = pd.Series(dtype=float)
+    atr_meses, cats_atr, ativos, contrib = [], {}, {}, []
+    id_ativo = lambda a, c, gr: ativos.setdefault((a, c), {"i": len(ativos), "ativo": a, "categoria": c, "grupo": gr})["i"]
+    for j in range(1, len(meses)):
+        p, m = meses[j - 1], meses[j]
+        if m not in real.index or pd.isna(real.get(m)):
+            continue
+        e0, gd0 = ricos[p]
+        w = e0[~e0.confidencial].copy()
+        w = w[w.perc_pl.abs() > 0]
+        cdi_m = float(ctx.cdi_m.get(m, 0.0))
+        # 1) retorno de cada ativo: esperado = CDI + spread proprio; usa a variacao real de preco quando ela e critica
+        #    (queda maior que 1,5 p.p. abaixo do esperado = pagamento de cupom/amortizacao -> fica o esperado)
+        esperado = (1 + cdi_m) * (1 + w.spread.fillna(0).clip(-5, 30) / 100) ** (1 / 12) - 1
+        rp = w.chave.map(preco.loc[m]) if len(preco) and m in preco.index.get_level_values(0) else pd.Series(np.nan, index=w.index)
+        r = rp.where(rp.notna() & (rp >= esperado - 0.015) & (rp <= esperado + 0.03), esperado)
+        cx = w.categoria.isin(CAIXA)
+        r[cx] = cdi_m
+        ativo_c = w.perc_pl * r
+        # 3) derivativos -> ativos protegidos
+        ip = w[w.ipca & w.perc_pl.gt(0)]
+        dur_ipca = wavg(ip.duration, ip.perc_pl) or 3.0
+        pr = w[w.pre & w.perc_pl.gt(0)]
+        dur_pre = wavg(pr.duration, pr.perc_pl) or 1.0
+        hedge = 0.0
+        for c in derivativos_mes(gd0, p, ctx, dur_ipca, dur_pre):
+            v = pnl_futuro(c, p, m, ctx) * c["fator"] / 100 * 100 if pd.notna(c["fator"]) else 0.0  # % do PL do fundo
+            if not v or np.isnan(v):
+                continue
+            alvo = (w.ipca if c["tipo"] == "DAP" else w.pre if c["tipo"] == "DI1" and w.pre.any() else w.ipca
+                    if c["tipo"] == "DI1" else w.usd if c["tipo"] in ("DOL", "WDO", "DDI") else pd.Series(False, index=w.index))
+            alvo = alvo & w.perc_pl.gt(0)
+            if not alvo.any():
+                alvo = w.perc_pl.gt(0) & ~cx
+            ativo_c[alvo] += v * w.perc_pl[alvo] / w.perc_pl[alvo].sum()
+            hedge += v
+        # 4) resto (taxas, negociacao, marcacao fora do esperado) -> todas as categorias que nao sao caixa, pelo peso
+        resid = float(real[m]) * 100 - ativo_c.sum()
+        cr = w.perc_pl.gt(0) & ~cx
+        ativo_c[cr] += resid * w.perc_pl[cr] / w.perc_pl[cr].sum()
+        atr_meses.append({"mes": m, "real": float(real[m]) * 100, "cdi": float(ctx.cdi_m.get(m, np.nan)) * 100,
+                          "hedge": hedge, "resid": resid})
+        jm = len(atr_meses) - 1
+        por_cat = ativo_c.groupby(w.categoria).sum()
+        peso = w.groupby("categoria").perc_pl.sum()
+        for c in set(por_cat.index) | set(cats_atr):
+            cats_atr.setdefault(c, {"contrib": [None] * jm, "peso": [None] * jm})
+            cats_atr[c]["contrib"].append(float(por_cat.get(c, 0.0)))
+            cats_atr[c]["peso"].append(float(peso.get(c, 0.0)))
+        pa = ativo_c[~cx].groupby([w.ativo[~cx], w.categoria[~cx], w.grupo[~cx]]).sum()   # caixa/compromissada fora do ranking
+        for (a, c, gr), v in pa.items():
+            if abs(v) > 1e-5:
+                contrib.append([id_ativo(a, c, gr), jm, float(v)])
+    for c in cats_atr.values():
+        for key in ("contrib", "peso"):
+            c[key] += [None] * (len(atr_meses) - len(c[key]))
+    return limpo({"nome": nome, "cnpj": cnpj, "carteira": cart_meses,
+                  "retorno": {"meses": atr_meses, "categorias": cats_atr,
+                              "ativos": sorted(ativos.values(), key=lambda x: x["i"]), "contrib": contrib}})
 
 
-RESULTADOS_DF = {}
-
-
-def _chave(fundos, desde):
-    return hashlib.md5((desde + "|" + "|".join(sorted(c for _, c in fundos))).encode()).hexdigest()
-
-
-def _roda(job, fundos, desde):
-    try:
-        res = monta(fundos, desde, JOBS[job]["log"].append)
-        with LOCK:
-            RESULTADOS[_chave(fundos, desde)] = res
-            while len(RESULTADOS) > 12:
-                velho = next(k for k in RESULTADOS if k != PRE.get("chave"))
-                RESULTADOS.pop(velho)
-        JOBS[job]["status"] = "ok"
-    except Exception as e:
-        JOBS[job] |= {"status": "erro", "erro": f"{type(e).__name__}: {e}"}
-
-
-# ------------------------------------------------------------------ pre-carga: todos os peers antes de abrir o painel
-DESDE_PAINEL = os.environ.get("PAINEL_DESDE", lt.DESDE)
-PRE = {"status": "parado", "log": [], "chave": None, "erro": None}
+# ------------------------------------------------------------------ pre-carga de todos os fundos
+def pasta_dia():
+    return lt.CACHE / "painel" / str(date.today())
 
 
 def precarrega(log=None):
-    """Baixa/processa todos os peers (PEERS, desde DESDE_PAINEL). Resultado do dia fica salvo em disco: reinicio rapido."""
     escreve = log or PRE["log"].append
     PRE["status"] = "rodando"
     try:
-        fundos = [(n, lt.cnpj_of(x)) for n, x in lt.PEERS.items()]
-        k = _chave(fundos, DESDE_PAINEL)
-        f = lt.CACHE / f"painel_{k}_{date.today()}.json"
-        if f.exists():
-            escreve("Usando o painel já processado hoje (cache).")
-            res = json.loads(f.read_text(encoding="utf-8"))
-        else:
-            escreve(f"Baixando e processando {len(fundos)} fundos desde {DESDE_PAINEL} (1a vez no dia pode levar minutos)...")
-            res = monta(fundos, DESDE_PAINEL, escreve)
-            for velho in lt.CACHE.glob(f"painel_{k}_*.json"):
-                velho.unlink(missing_ok=True)
-            f.write_text(json.dumps(res), encoding="utf-8")
-        with LOCK:
-            RESULTADOS[k] = res
-        PRE.update(status="ok", chave=k)
+        fundos = [(n, lt.cnpj_of(x), True) for n, x in lt.NOSSOS_FUNDOS.items()] + \
+                 [(n, lt.cnpj_of(x), False) for n, x in lt.PEERS.items()]
+        dest = pasta_dia()
+        chave = "|".join(sorted(c for _, c, _ in fundos)) + "|" + lt.DESDE + f"|m{METODO}"
+        if (dest / "visao.json").exists() and json.loads((dest / "visao.json").read_text(encoding="utf-8")).get("chave") == chave:
+            escreve("Usando o painel já processado hoje.")
+            PRE.update(status="ok", pasta=str(dest))
+            return
+        dest.mkdir(parents=True, exist_ok=True)
+        for velho in (lt.CACHE / "painel").glob("*"):
+            if velho != dest and velho.is_dir():
+                for f in velho.glob("*"):
+                    f.unlink(missing_ok=True)
+                velho.rmdir()
+        escreve(f"Baixando/atualizando dados da CVM de {len(fundos)} fundos desde {lt.DESDE}...")
+        workers = max(1, min(4, (os.cpu_count() or 2)))
+        meses, dia = lt.prepara(sorted(c for _, c, _ in fundos), lt.DESDE, workers=workers, log=escreve)
+        ctx = Contexto(escreve)
+        escreve("Carregando carteiras...")
+        carga = lt.carrega_pos(meses)
+        pl = carga[1]
+        nomes = {n: c for n, c, _ in fundos}
+        d = lt.diario(nomes, dia)
+        rent = lt.rentabilidade(d, ctx.cdi_m) if len(d) else pd.DataFrame(columns=["fundo", "mes", "retorno"])
+        for i, (n, c, _) in enumerate(fundos, 1):
+            escreve(f"[{i}/{len(fundos)}] {n}: look-through, carteira e atribuição...")
+            df = lt.lookthrough({n: c}, meses, carga)
+            fid = re.sub(r"\D", "", c)
+            if len(df):
+                (dest / (fid + ".json")).write_text(json.dumps(detalhe(n, c, df, ctx, pl, rent)), encoding="utf-8")
+                df.drop(columns=["chave", "fator"], errors="ignore").to_parquet(dest / (fid + ".parquet"), index=False)
+        # visao geral: cotas diarias de todos (para retorno em qualquer periodo, consolidado e risco x retorno)
+        datas = sorted(d.data.unique())
+        idx = pd.DatetimeIndex(datas)
+        q = d.pivot_table(index="data", columns="fundo", values="VL_QUOTA").reindex(idx)
+        plf = d.pivot_table(index="data", columns="fundo", values="VL_PATRIM_LIQ").reindex(idx)
+        cdi_idx = (1 + ctx.cdi_d.reindex(idx).fillna(0)).cumprod()
+        cores, k_nosso = {}, 0
+        for n, c, nosso in fundos:
+            cores[n] = NOSSAS_CORES[k_nosso % len(NOSSAS_CORES)] if nosso else "#9aa0a6"
+            k_nosso += nosso
+        visao = {"chave": chave, "gerado": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"), "desde": lt.DESDE,
+                 "ult_carteira": max(meses) if meses else None, "anbima": ctx.an_dias[-1] if ctx.an_dias else None,
+                 "datas": [t.strftime("%Y-%m-%d") for t in idx], "cdi": cdi_idx.tolist(),
+                 "fundos": [{"nome": n, "cnpj": c, "id": re.sub(r"\D", "", c), "nosso": nosso, "cor": cores[n],
+                             "tem_carteira": (dest / (re.sub(r"\D", "", c) + ".json")).exists(),
+                             "cota": q[n].tolist() if n in q else [], "pl": float(plf[n].dropna().iloc[-1]) / 1e6 if n in plf and plf[n].notna().any() else None}
+                            for n, c, nosso in fundos],
+                 "cat_cores": CAT_CORES}
+        (dest / "visao.json").write_text(json.dumps(limpo(visao)), encoding="utf-8")
+        escreve("Pronto.")
+        PRE.update(status="ok", pasta=str(dest))
     except Exception as e:
+        import traceback
         PRE.update(status="erro", erro=f"{type(e).__name__}: {e}")
         escreve("ERRO: " + PRE["erro"])
+        escreve(traceback.format_exc()[-1500:])
 
 
-def _inicio():                              # servidor (pasta/Docker): cadastro e pre-carga em segundo plano
-    if not CAD.get("iniciado"):
-        CAD["iniciado"] = True
-        threading.Thread(target=carrega_cadastro, daemon=True).start()
+def _inicio():                              # servidor (pasta/Docker): pre-carga em segundo plano
     if PRE["status"] == "parado":
         threading.Thread(target=precarrega, daemon=True).start()
 
@@ -842,60 +1040,36 @@ def _inicio():                              # servidor (pasta/Docker): cadastro 
 app.add_event_handler("startup", _inicio)
 
 
+# ------------------------------------------------------------------ API
 @app.get("/api/inicial")
 def inicial():
-    return {"status": PRE["status"], "chave": PRE["chave"], "log": PRE["log"][-8:], "erro": PRE["erro"]}
+    return {"status": PRE["status"], "log": PRE["log"][-8:], "erro": PRE["erro"]}
 
 
-@app.post("/api/carregar")
-def carregar(body: dict):
-    fundos = [(curto(x.get("curto") or x["nome"]), lt.fmt(x["cnpj"])) for x in body.get("fundos", [])][:8]
-    if not fundos:
-        raise HTTPException(400, "escolha ao menos um fundo")
-    vistos, unicos = set(), []
-    for n, c in fundos:                              # nomes curtos repetidos ganham sufixo
-        while n in vistos:
-            n += "*"
-        vistos.add(n)
-        unicos.append((n, c))
-    desde = body.get("desde") or "2024-01"
-    k = _chave(unicos, desde)
-    if k in RESULTADOS:
-        return {"job": None, "chave": k, "status": "ok"}
-    job = uuid.uuid4().hex[:10]
-    JOBS[job] = {"status": "rodando", "log": [], "chave": k}
-    threading.Thread(target=_roda, args=(job, unicos, desde), daemon=True).start()
-    return {"job": job, "chave": k, "status": "rodando"}
+def _arquivo(nome):
+    if PRE["status"] != "ok":
+        raise HTTPException(503, "painel ainda carregando")
+    f = os.path.join(PRE["pasta"], nome)
+    if not os.path.exists(f):
+        raise HTTPException(404, "sem dados")
+    return f
 
 
-@app.get("/api/status/{job}")
-def status(job: str):
-    j = JOBS.get(job) or HTTPException(404)
-    if isinstance(j, HTTPException):
-        raise j
-    return {"status": j["status"], "log": j["log"][-6:], "erro": j.get("erro"), "chave": j["chave"]}
+@app.get("/api/visao")
+def visao():
+    return FileResponse(_arquivo("visao.json"), media_type="application/json")
 
 
-@app.get("/api/resultado/{chave}")
-def resultado(chave: str):
-    if chave not in RESULTADOS:
-        raise HTTPException(404, "resultado expirou; carregue de novo")
-    return JSONResponse(RESULTADOS[chave])
+@app.get("/api/fundo/{fid}")
+def fundo(fid: str):
+    return FileResponse(_arquivo(re.sub(r"\D", "", fid) + ".json"), media_type="application/json")
 
 
-@app.get("/api/csv/{chave}/{tipo}")
-def csv(chave: str, tipo: str):
-    if chave not in RESULTADOS_DF:
-        if chave not in RESULTADOS:
-            raise HTTPException(404)
-        m = RESULTADOS[chave]["meta"]
-        fundos = [(f["nome"], f["cnpj"]) for f in m["fundos"]]
-        meses, dia = lt.prepara(sorted(c for _, c in fundos), m["desde"], workers=1, log=lambda *_: None)
-        RESULTADOS_DF[chave] = (lt.lookthrough(dict(fundos), meses), lt.diario(dict(fundos), dia))
-    df, d = RESULTADOS_DF[chave]
-    x = df.drop(columns=["chave", "fator"], errors="ignore") if tipo == "carteira" else d
-    return Response(x.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig"), media_type="text/csv",
-                    headers={"Content-Disposition": f'attachment; filename="{tipo}.csv"'})
+@app.get("/api/csv/{fid}")
+def csv(fid: str):
+    df = pd.read_parquet(_arquivo(re.sub(r"\D", "", fid) + ".parquet"))
+    return Response(df.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig"), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="carteira_{fid}.csv"'})
 
 
 @app.get("/")
@@ -914,7 +1088,7 @@ PAGINA = r"""<!doctype html>
 :root {
   --bg: #f5f6f8; --surface: #ffffff; --surface-2: #f0f1f4; --line: #e3e5ea; --line-2: #d0d3da;
   --text-1: #14161a; --text-2: #4d525c; --muted: #8a8f99;
-  --accent: #2a78d6; --accent-soft: rgba(42,120,214,.10); --accent-ink: #ffffff;
+  --accent: #2a78d6; --accent-soft: rgba(42,120,214,.10); --nosso: #eb6834; --nosso-soft: rgba(235,104,52,.12);
   --good: #0f7b3f; --bad: #c43d3d; --radius: 12px;
   --shadow: 0 1px 2px rgba(16,24,40,.05), 0 1px 3px rgba(16,24,40,.06);
   --font: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -923,129 +1097,108 @@ PAGINA = r"""<!doctype html>
   :root:not([data-theme="light"]) {
     --bg: #0f1012; --surface: #17191c; --surface-2: #1f2226; --line: #2a2d32; --line-2: #3a3e45;
     --text-1: #f2f3f5; --text-2: #b7bcc6; --muted: #858b96; --accent: #3987e5; --accent-soft: rgba(57,135,229,.16);
-    --good: #2fbf6b; --bad: #ef6b6b; --shadow: none;
+    --good: #2fbf6b; --bad: #ef6b6b; --shadow: none; --nosso-soft: rgba(235,104,52,.18);
   }
 }
 :root[data-theme="dark"] {
   --bg: #0f1012; --surface: #17191c; --surface-2: #1f2226; --line: #2a2d32; --line-2: #3a3e45;
   --text-1: #f2f3f5; --text-2: #b7bcc6; --muted: #858b96; --accent: #3987e5; --accent-soft: rgba(57,135,229,.16);
-  --good: #2fbf6b; --bad: #ef6b6b; --shadow: none;
+  --good: #2fbf6b; --bad: #ef6b6b; --shadow: none; --nosso-soft: rgba(235,104,52,.18);
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--text-1); font: 14px/1.5 var(--font); }
-h1 { font-size: 17px; margin: 0; letter-spacing: -.01em; }
-h2 { font-size: 21px; margin: 0; letter-spacing: -.01em; }
+h1 { font-size: 16px; margin: 0; }
+h2 { font-size: 20px; margin: 0; letter-spacing: -.01em; }
 h3 { font-size: 14px; margin: 0 0 2px; }
 button { font: inherit; cursor: pointer; }
-input, select { font: inherit; color: var(--text-1); background: var(--surface); border: 1px solid var(--line-2); border-radius: 8px; padding: 8px 10px; width: 100%; }
+input, select { font: inherit; color: var(--text-1); background: var(--surface); border: 1px solid var(--line-2); border-radius: 8px; padding: 8px 10px; }
 
-/* barra superior */
-.barra { position: sticky; top: 0; z-index: 20; display: flex; justify-content: space-between; align-items: center; gap: 12px;
-  padding: 10px 22px; background: var(--surface); border-bottom: 1px solid var(--line); }
-.marca { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.logo { width: 28px; height: 28px; flex: none; } .logo.grande { width: 48px; height: 48px; }
-.datas { margin: 0; font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.acoes { display: flex; gap: 8px; }
+.barra { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 18px; padding: 8px 22px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.marca { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.logo { width: 26px; height: 26px; flex: none; } .logo.grande { width: 48px; height: 48px; }
+.datas { margin: 0; font-size: 11.5px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.abas { display: flex; gap: 4px; margin-left: auto; }
+.abas button { border: 0; background: transparent; color: var(--text-2); padding: 8px 14px; border-radius: 8px; font-weight: 600; }
+.abas button:hover { background: var(--surface-2); }
+.abas button[aria-selected="true"] { background: var(--accent-soft); color: var(--accent); }
 .botao { border: 1px solid var(--line-2); background: var(--surface); color: var(--text-1); border-radius: 8px; padding: 7px 12px; }
 .botao:hover { background: var(--surface-2); }
-.botao.primario { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .botao.icone { width: 36px; padding: 7px 0; }
+.botao.sel { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); font-weight: 600; }
 
-/* layout */
-.layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); align-items: start; }
-.layout > * { min-width: 0; }
-.menu { position: sticky; top: 57px; height: calc(100vh - 57px); overflow: auto; padding: 16px 10px; border-right: 1px solid var(--line); background: var(--surface); }
-.menu .grupo { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 14px 10px 6px; }
-.menu button { display: block; width: 100%; text-align: left; border: 0; background: transparent; color: var(--text-2); padding: 8px 10px; border-radius: 8px; }
-.menu button:hover { background: var(--surface-2); color: var(--text-1); }
-.menu button[aria-current="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-main { padding: 20px 26px 60px; }
-.topo-secao { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; }
-.descricao { color: var(--text-2); margin: 4px 0 0; font-size: 13px; max-width: 760px; }
-.foco { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.foco .rot { font-size: 12px; color: var(--muted); margin-right: 2px; }
-.pill { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line-2); background: var(--surface); color: var(--text-2);
-  border-radius: 999px; padding: 5px 12px; font-size: 13px; }
-.pill .ponto { width: 9px; height: 9px; border-radius: 3px; flex: none; }
-.pill[aria-pressed="true"] { border-color: var(--text-1); color: var(--text-1); font-weight: 600; }
-.pill.desligado { opacity: .45; }
-.legenda-fundos { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 14px; }
-.legenda-fundos:empty { display: none; }
+main { max-width: 1380px; margin: 0 auto; padding: 18px 24px 60px; }
+.cab { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; justify-content: space-between; margin-bottom: 14px; }
+.titulo-fundo { min-width: 0; }
+.titulo-fundo h2 { display: flex; align-items: center; gap: 8px; }
+.tag { font-size: 11px; font-weight: 700; color: var(--nosso); background: var(--nosso-soft); border-radius: 6px; padding: 2px 7px; letter-spacing: .02em; }
+.sub { color: var(--muted); font-size: 12px; margin: 2px 0 0; }
+.controles { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.controles label { font-size: 12px; color: var(--text-2); display: flex; gap: 6px; align-items: center; }
 
-/* cartoes e grade */
+/* busca de fundo por digitacao */
+.busca { position: relative; width: min(420px, 100%); }
+.busca input { width: 100%; padding-left: 34px; }
+.busca::before { content: "⌕"; position: absolute; left: 11px; top: 6px; font-size: 17px; color: var(--muted); }
+.sugestoes { position: absolute; z-index: 30; left: 0; right: 0; top: 100%; margin: 4px 0 0; padding: 4px; list-style: none; max-height: 340px; overflow: auto;
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: 10px; box-shadow: 0 10px 28px rgba(0,0,0,.16); }
+.sugestoes li { padding: 7px 9px; border-radius: 7px; cursor: pointer; display: flex; justify-content: space-between; gap: 10px; font-size: 13px; }
+.sugestoes li small { color: var(--muted); }
+.sugestoes li:hover, .sugestoes li.ativo { background: var(--surface-2); }
+
 .grade { display: grid; gap: 16px; margin-bottom: 16px; }
-.g2 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .g3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.g2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.g-tabela { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
 .cartao { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px 16px; min-width: 0; margin-bottom: 16px; }
 .grade > .cartao { margin-bottom: 0; }
-.cartao > h3 + .sub { margin-top: 0; }
-.sub { color: var(--muted); font-size: 12px; margin: 2px 0 8px; }
-.grafico { width: 100%; }
+.cartao .sub { margin-bottom: 8px; }
 .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
 .kpi { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 12px 14px; }
 .kpi .r { font-size: 12px; color: var(--text-2); }
 .kpi .v { font-size: 24px; font-weight: 700; letter-spacing: -.02em; margin-top: 2px; font-variant-numeric: tabular-nums; }
 .kpi .s { font-size: 11.5px; color: var(--muted); }
-
-/* cartoes de fundo (resumo) */
-.fundos { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; margin-bottom: 16px; }
-.fcard { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px 16px; border-top: 4px solid var(--c); }
-.fcard .nome { font-weight: 700; font-size: 15px; }
-.fcard .cnpj { color: var(--muted); font-size: 11.5px; }
-.fcard .pl { font-size: 26px; font-weight: 700; letter-spacing: -.02em; margin: 8px 0 2px; font-variant-numeric: tabular-nums; }
-.fcard .pl small { font-size: 12px; font-weight: 400; color: var(--muted); }
-.fcard dl { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; margin: 8px 0 0; font-size: 12.5px; }
-.fcard dt { color: var(--text-2); } .fcard dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
 .pos { color: var(--good); } .neg { color: var(--bad); }
 
-/* tabelas */
 .tabela-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
-table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
-th, td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
-th { position: sticky; top: 0; background: var(--surface-2); color: var(--text-2); font-weight: 600; z-index: 1; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { padding: 7px 11px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+th { position: sticky; top: 0; background: var(--surface-2); color: var(--text-2); font-weight: 600; font-size: 12px; z-index: 1; }
+th.ord { cursor: pointer; } th.ord:hover { color: var(--text-1); }
 tbody tr:hover td { background: var(--accent-soft); }
 td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
-td.texto { white-space: normal; min-width: 220px; }
-.filtros { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0 10px; }
-.filtros input { max-width: 320px; }
-.filtros select { width: auto; }
-.aviso { background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; color: var(--text-2); font-size: 12.5px; margin-bottom: 16px; }
-.links a { color: var(--accent); margin-right: 18px; font-weight: 600; }
+td.texto { white-space: normal; min-width: 200px; }
+tr.total td { font-weight: 700; border-top: 2px solid var(--line-2); background: var(--surface-2); }
+tr.secao td { font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); background: var(--surface); padding-top: 14px; }
+tr.nosso td:first-child { box-shadow: inset 3px 0 0 var(--nosso); }
+.ponto { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 6px; vertical-align: 0; }
+.nota { color: var(--muted); font-size: 11.5px; margin: 8px 0 0; }
 
-/* carregamento */
+/* selecao multipla (consolidado) */
+.multi { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--surface); min-height: 44px; }
+.multi .chip { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 3px 4px 3px 10px; font-size: 12.5px; background: var(--surface-2); }
+.multi .chip.nosso { background: var(--nosso-soft); }
+.multi .chip button { border: 0; background: none; color: var(--muted); font-size: 15px; line-height: 1; padding: 0 4px; }
+.multi .busca { width: 220px; flex: 1; }
+.multi .busca input { border: 0; padding: 5px 5px 5px 30px; }
+.multi .busca::before { top: 2px; }
+
 .carregando { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: var(--bg); }
 .carregando[hidden] { display: none; }
 .carregando .caixa { width: min(560px, 92vw); text-align: center; }
 .carregando h2 { margin-top: 12px; }
+.descricao { color: var(--text-2); font-size: 13px; }
 .barra-prog { height: 4px; background: var(--line); border-radius: 4px; overflow: hidden; margin: 18px 0 10px; }
 .barra-prog div { height: 100%; width: 35%; background: var(--accent); border-radius: 4px; animation: vai 1.4s ease-in-out infinite; }
 @keyframes vai { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }
 pre { text-align: left; white-space: pre-wrap; font: 12px/1.5 ui-monospace, Consolas, monospace; color: var(--text-2); background: var(--surface);
-  border: 1px solid var(--line); border-radius: 8px; padding: 10px; max-height: 200px; overflow: auto; margin: 0; }
+  border: 1px solid var(--line); border-radius: 8px; padding: 10px; max-height: 220px; overflow: auto; margin: 0; }
+.vazio { padding: 60px 0; text-align: center; color: var(--text-2); }
 
-/* dialogo adicionar */
-dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--text-1); padding: 0; width: min(560px, 94vw); }
-dialog::backdrop { background: rgba(0,0,0,.35); }
-.dlg { padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; }
-.dlg-acoes { display: flex; justify-content: flex-end; gap: 8px; }
-.busca-wrap { position: relative; }
-.sugestoes { position: absolute; z-index: 5; left: 0; right: 0; top: 100%; margin: 4px 0 0; padding: 4px; list-style: none; max-height: 280px; overflow: auto;
-  background: var(--surface); border: 1px solid var(--line-2); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.15); }
-.sugestoes li { padding: 7px 8px; border-radius: 6px; cursor: pointer; font-size: 12.5px; }
-.sugestoes li:hover, .sugestoes li.ativo { background: var(--surface-2); }
-.sugestoes small, .novos small { color: var(--muted); display: block; }
-.novos { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
-.novos li { display: flex; justify-content: space-between; gap: 8px; align-items: center; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 12.5px; }
-.novos button { border: 0; background: none; color: var(--muted); font-size: 16px; }
-
-@media (max-width: 900px) {
+@media (max-width: 980px) {
   html, body { overflow-x: hidden; }
-  .barra { padding: 10px 14px; }
-  .layout { grid-template-columns: minmax(0, 1fr); }
-  .menu { position: static; height: auto; display: flex; gap: 4px; overflow-x: auto; padding: 8px; border-right: 0; border-bottom: 1px solid var(--line); }
-  .menu .grupo { display: none; }
-  .menu button { width: auto; white-space: nowrap; }
-  main { padding: 16px 14px 50px; }
-  .g2, .g3 { grid-template-columns: minmax(0, 1fr); }
+  .barra { flex-wrap: wrap; padding: 8px 14px; gap: 8px; }
+  .abas { margin-left: 0; order: 3; width: 100%; }
+  main { padding: 14px 14px 50px; }
+  .g2, .g-tabela { grid-template-columns: minmax(0, 1fr); }
   .kpi .v { font-size: 20px; }
 }
 
@@ -1056,452 +1209,351 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
 <header class="barra">
   <div class="marca">
     <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect x="4" y="16" width="5" height="12" rx="1.5" fill="#2a78d6"/><rect x="13.5" y="9" width="5" height="19" rx="1.5" fill="#1baf7a"/><rect x="23" y="4" width="5" height="24" rx="1.5" fill="#eb6834"/></svg>
-    <div><h1>Painel de fundos</h1><p id="datas" class="datas">Carregando dados...</p></div>
+    <div><h1>Painel de fundos</h1><p id="datas" class="datas"></p></div>
   </div>
-  <div class="acoes">
-    <button id="btn-add" class="botao">+ Fundo</button>
-    <button id="tema" class="botao icone" title="Tema claro/escuro" aria-label="Alternar tema">◐</button>
-  </div>
+  <nav class="abas" role="tablist">
+    <button role="tab" data-aba="carteira" aria-selected="true">Carteira</button>
+    <button role="tab" data-aba="retorno" aria-selected="false">Retorno</button>
+    <button role="tab" data-aba="consolidado" aria-selected="false">Consolidado</button>
+  </nav>
+  <button id="tema" class="botao icone" title="Tema claro/escuro" aria-label="Alternar tema">◐</button>
 </header>
-
-<div class="layout">
-  <nav id="menu" class="menu" aria-label="Seções"></nav>
-  <main>
-    <div class="topo-secao">
-      <div><h2 id="titulo"></h2><p id="descricao" class="descricao"></p></div>
-      <div id="foco" class="foco"></div>
-    </div>
-    <div id="legenda" class="legenda-fundos"></div>
-    <section id="conteudo"></section>
-  </main>
-</div>
+<main id="conteudo"></main>
 
 <div id="carregando" class="carregando">
   <div class="caixa">
     <svg class="logo grande" viewBox="0 0 32 32" aria-hidden="true"><rect x="4" y="16" width="5" height="12" rx="1.5" fill="#2a78d6"/><rect x="13.5" y="9" width="5" height="19" rx="1.5" fill="#1baf7a"/><rect x="23" y="4" width="5" height="24" rx="1.5" fill="#eb6834"/></svg>
     <h2>Preparando o painel</h2>
-    <p class="descricao">Baixando e processando os dados de todos os fundos (CVM, ANBIMA e Banco Central). Na primeira vez do dia pode levar alguns minutos.</p>
+    <p class="descricao">Baixando e processando os dados de todos os fundos. Na primeira vez do dia pode levar alguns minutos.</p>
     <div class="barra-prog"><div></div></div>
     <pre id="log-carga"></pre>
   </div>
 </div>
-
-<dialog id="dlg-add">
-  <form method="dialog" class="dlg">
-    <h2>Adicionar fundos</h2>
-    <p class="descricao">Busque por nome ou CNPJ. Os fundos escolhidos são processados junto com os atuais.</p>
-    <div class="busca-wrap"><input id="busca" type="search" placeholder="ex.: Kinea, Ibiuna, 37.310.657/0001-65" autocomplete="off"><ul id="sugestoes" class="sugestoes" hidden></ul></div>
-    <ul id="novos" class="novos"></ul>
-    <div class="dlg-acoes"><button value="cancelar" class="botao">Cancelar</button><button id="btn-processar" value="ok" class="botao primario">Processar</button></div>
-    <pre id="log-add" hidden></pre>
-  </form>
-</dialog>
 <script>
-// Painel de fundos - frontend sem framework. Os dados ja vem processados do servidor (/api).
+// Painel de fundos - 3 abas: Carteira, Retorno, Consolidado. Dados processados pelo servidor (/api).
 const $ = (s, el = document) => el.querySelector(s);
-const CORES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"];
 const nf = (d) => new Intl.NumberFormat("pt-BR", { minimumFractionDigits: d, maximumFractionDigits: d });
-const num = (v, d = 2) => (v == null || Number.isNaN(v) ? "–" : nf(d).format(v));
-const pct = (v, d = 2) => (v == null || Number.isNaN(v) ? "–" : nf(d).format(v) + "%");
-const sinal = (v) => (v == null ? "" : v >= 0 ? "pos" : "neg");
+const num = (v, d = 2) => (v == null || !isFinite(v) ? "–" : nf(d).format(v));
+const pct = (v, d = 2) => (v == null || !isFinite(v) ? "–" : nf(d).format(v) + "%");
+const pp = (v, d = 2) => (v == null || !isFinite(v) ? "–" : (v > 0 ? "+" : "") + nf(d).format(v) + " pp");
+const cls = (v) => (v == null ? "" : v >= 0 ? "pos" : "neg");
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
-const mesBR = (m) => { if (!m) return "–"; const [a, b] = m.split("-"); return ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"][+b - 1] + "/" + a; };
-const dataBR = (d) => (d ? new Date(d + "T12:00").toLocaleDateString("pt-BR") : "–");
-const st = { R: null, chave: null, secao: "resumo", foco: null, ocultos: new Set(), mes: {}, novos: [] };
+const MESES = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+const mesBR = (m) => (m ? MESES[+m.slice(5, 7) - 1] + "/" + m.slice(0, 4) : "–");
+const dataBR = (d) => (d ? d.slice(8, 10) + "/" + d.slice(5, 7) + "/" + d.slice(0, 4) : "–");
+const semAcento = (t) => String(t).normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase();
+const espera = (ms) => new Promise((ok) => setTimeout(ok, ms));
+const st = { V: null, F: {}, aba: "carteira", fundo: null, mesCart: {}, ret: { de: null, ate: null }, cons: { sel: null, de: null, ate: null, ord: "ret", asc: false } };
 
-const SECOES = [
-  { g: "Visão geral", id: "resumo", t: "Resumo", d: "Os números principais de cada fundo e o retorno acumulado contra o CDI.", fn: resumo },
-  { g: "Desempenho", id: "rentab", t: "Rentabilidade", d: "Retorno por ano e por mês em % do CDI, retorno acumulado e drawdown (queda desde o pico anterior).", fn: rentab },
-  { id: "pl", t: "Patrimônio & captação", d: "Patrimônio líquido, aplicações menos resgates de cada mês e número de cotistas.", fn: plcap },
-  { g: "Carteira (fundo em foco)", id: "alocacao", t: "Alocação", d: "Carteira look-through: as cotas de outros fundos são abertas até o ativo final. Fonte: CDA mensal da CVM.", foco: 1, fn: alocacao },
-  { id: "credito", t: "Crédito", d: "Spread, taxa e duration das debêntures pela marcação ANBIMA, e indexador, prazo e rating informados à CVM.", foco: 1, fn: credito },
-  { id: "mov", t: "Movimentações", d: "Compras e vendas do mês informadas na CDA, posições novas e zeradas.", foco: 1, fn: movimentos },
-  { id: "deriv", t: "Derivativos & moeda", d: "Futuros, opções e swaps pelo valor informado (em geral o nocional) e a exposição a moeda estrangeira.", foco: 1, fn: derivativos },
-  { id: "marc", t: "Marcação (estimada)", d: "Variação de preço das posições mantidas de um mês para o outro. Não é P&L contábil: cupons e amortizações aparecem como queda de preço.", foco: 1, fn: marcacao },
-  { g: "Peers", id: "comp", t: "Comparação", d: "Os fundos lado a lado: alocação, crédito, emissores em comum e risco x retorno.", fn: comparacao },
-  { id: "dados", t: "Dados & fontes", d: "Downloads e de onde vem cada número.", fn: dados },
-];
-
-// ------------------------------------------------------------------ tema
+// ------------------------------------------------------------------ tema e abas
 try { const t = localStorage.getItem("tema"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
 $("#tema").onclick = () => {
-  const escuro = document.documentElement.dataset.theme === "dark" ||
-    (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
+  const escuro = document.documentElement.dataset.theme === "dark" || (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
   document.documentElement.dataset.theme = escuro ? "light" : "dark";
   try { localStorage.setItem("tema", document.documentElement.dataset.theme); } catch (e) {}
-  if (st.R) desenha();
+  if (st.V) desenha();
 };
+document.querySelectorAll(".abas button").forEach((b) => (b.onclick = () => {
+  st.aba = b.dataset.aba;
+  document.querySelectorAll(".abas button").forEach((x) => x.setAttribute("aria-selected", x === b));
+  desenha();
+}));
 
-// ------------------------------------------------------------------ carga inicial (servidor ja baixou/processou os peers)
-const espera = (ms) => new Promise((ok) => setTimeout(ok, ms));
-async function inicia() {
+// ------------------------------------------------------------------ carga
+(async function inicia() {
   for (;;) {
     let s;
     try { s = await (await fetch("/api/inicial")).json(); } catch (e) { await espera(2000); continue; }
     $("#log-carga").textContent = (s.log || []).join("\n") || "Iniciando...";
-    if (s.status === "erro") { $("#log-carga").textContent += "\n\nErro: " + s.erro; return; }
-    if (s.status === "ok") return abre(s.chave);
+    if (s.status === "erro") return ($("#log-carga").textContent += "\n\nErro: " + s.erro);
+    if (s.status === "ok") break;
     await espera(2000);
   }
-}
-async function abre(chave) {
-  st.R = await (await fetch("/api/resultado/" + chave)).json();
-  st.chave = chave;
-  const fs = st.R.meta.fundos.map((f) => f.nome);
-  if (!fs.includes(st.foco)) st.foco = (st.R.meta.fundos.find((f) => st.R.por_fundo[f.nome]) || {}).nome;
-  st.ocultos = new Set([...st.ocultos].filter((f) => fs.includes(f)));
-  const m = st.R.meta;
-  $("#datas").textContent = `${m.fundos.length} fundos · carteiras até ${mesBR(m.ult_carteira)} · cotas até ${dataBR(m.ult_cota)} · ANBIMA ${dataBR(m.anbima_data)} · desde ${mesBR(m.desde)}`;
+  st.V = await (await fetch("/api/visao")).json();
+  const V = st.V;
+  st.fundo = (V.fundos.find((f) => f.nosso && f.tem_carteira) || V.fundos.find((f) => f.tem_carteira) || V.fundos[0]).id;
+  st.cons.sel = new Set(V.fundos.map((f) => f.id));
+  $("#datas").textContent = `${V.fundos.length} fundos (${V.fundos.filter((f) => f.nosso).length} nossos) · carteiras até ${mesBR(V.ult_carteira)} · cotas até ${dataBR(V.datas[V.datas.length - 1])} · ANBIMA ${dataBR(V.anbima)}`;
   $("#carregando").hidden = true;
-  menu(); desenha();
+  desenha();
+})();
+async function detalhe(id) {
+  if (!st.F[id]) st.F[id] = await (await fetch("/api/fundo/" + id)).json();
+  return st.F[id];
 }
-inicia();
+const fundoPor = (id) => st.V.fundos.find((f) => f.id === id);
 
-// ------------------------------------------------------------------ navegacao
-function menu() {
-  $("#menu").innerHTML = SECOES.map((s) => (s.g ? `<div class="grupo">${s.g}</div>` : "") +
-    `<button data-s="${s.id}" aria-current="${s.id === st.secao}">${s.t}</button>`).join("");
-  $("#menu").querySelectorAll("button").forEach((b) => (b.onclick = () => { st.secao = b.dataset.s; menu(); desenha(); scrollTo(0, 0); }));
+// ------------------------------------------------------------------ busca de fundo (digitando)
+function campoBusca(onPick, placeholder = "Digite o nome ou CNPJ do fundo...", soComCarteira = false) {
+  const wrap = document.createElement("div");
+  wrap.className = "busca";
+  wrap.innerHTML = `<input type="search" placeholder="${placeholder}" autocomplete="off"><ul class="sugestoes" hidden></ul>`;
+  const inp = $("input", wrap), ul = $("ul", wrap);
+  let sel = 0, lista = [];
+  const filtra = () => {
+    const q = semAcento(inp.value.trim()), dig = inp.value.replace(/\D/g, "");
+    lista = st.V.fundos.filter((f) => (!soComCarteira || f.tem_carteira) && (!q || semAcento(f.nome).includes(q) || (dig.length > 2 && f.id.includes(dig))))
+      .sort((a, b) => b.nosso - a.nosso || a.nome.localeCompare(b.nome)).slice(0, 30);
+    sel = 0;
+    ul.innerHTML = lista.map((f, i) => `<li data-i="${i}" class="${i === 0 ? "ativo" : ""}"><span>${f.nosso ? '<span class="ponto" style="background:var(--nosso)"></span>' : ""}${esc(f.nome)}</span><small>${esc(f.cnpj)}</small></li>`).join("") || "<li>Nada encontrado</li>";
+    ul.hidden = false;
+  };
+  const escolhe = (i) => { if (lista[i]) { ul.hidden = true; inp.value = ""; onPick(lista[i]); } };
+  inp.addEventListener("input", filtra);
+  inp.addEventListener("focus", filtra);
+  inp.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      sel = (sel + (e.key === "ArrowDown" ? 1 : -1) + lista.length) % Math.max(lista.length, 1);
+      ul.querySelectorAll("li").forEach((x, i) => x.classList.toggle("ativo", i === sel)); e.preventDefault();
+    } else if (e.key === "Enter") { e.preventDefault(); escolhe(sel); } else if (e.key === "Escape") ul.hidden = true;
+  });
+  ul.addEventListener("mousedown", (e) => { const li = e.target.closest("li[data-i]"); if (li) escolhe(+li.dataset.i); });
+  inp.addEventListener("blur", () => setTimeout(() => (ul.hidden = true), 150));
+  return wrap;
 }
-const fundosVisiveis = () => st.R.meta.fundos.filter((f) => !st.ocultos.has(f.nome));
-const cor = (f) => (st.R.meta.fundos.find((x) => x.nome === f) || {}).cor || CORES[0];
-const corCat = (c) => st.R.categorias[c] || "#898781";
 
-function desenha() {
-  const s = SECOES.find((x) => x.id === st.secao), R = st.R;
-  $("#titulo").textContent = s.t; $("#descricao").textContent = s.d;
-  const comFoco = R.meta.fundos.filter((f) => R.por_fundo[f.nome]);
-  $("#foco").innerHTML = s.foco ? `<span class="rot">Fundo em foco</span>` + comFoco.map((f) =>
-    `<button class="pill" aria-pressed="${f.nome === st.foco}" data-f="${esc(f.nome)}"><span class="ponto" style="background:${f.cor}"></span>${esc(f.nome)}</button>`).join("") : "";
-  $("#foco").querySelectorAll("button").forEach((b) => (b.onclick = () => { st.foco = b.dataset.f; desenha(); }));
-  $("#legenda").innerHTML = s.foco || s.id === "dados" ? "" : R.meta.fundos.map((f) =>
-    `<button class="pill ${st.ocultos.has(f.nome) ? "desligado" : ""}" data-f="${esc(f.nome)}" title="Mostrar/ocultar nos gráficos"><span class="ponto" style="background:${f.cor}"></span>${esc(f.nome)}</button>`).join("");
-  $("#legenda").querySelectorAll("button").forEach((b) => (b.onclick = () => {
-    st.ocultos.has(b.dataset.f) ? st.ocultos.delete(b.dataset.f) : st.ocultos.add(b.dataset.f); desenha(); }));
-  const el = $("#conteudo");
-  try { el.innerHTML = ""; s.fn(el, R); }
-  catch (e) { el.innerHTML = `<div class="aviso">Não foi possível desenhar esta seção: ${esc(e.message)}</div>`; console.error(e); }
-}
-
-// ------------------------------------------------------------------ componentes
-const card = (id, titulo, sub = "") => `<div class="cartao"><h3>${titulo}</h3>${sub ? `<p class="sub">${sub}</p>` : ""}<div id="${id}" class="grafico"></div></div>`;
-const cardHTML = (titulo, html, sub = "") => `<div class="cartao"><h3>${titulo}</h3>${sub ? `<p class="sub">${sub}</p>` : ""}${html}</div>`;
-const kpi = (r, v, s = "", cls = "") => `<div class="kpi"><div class="r">${r}</div><div class="v ${cls}">${v}</div><div class="s">${s}</div></div>`;
+// ------------------------------------------------------------------ graficos e tabelas
 function layout(extra = {}) {
   return Object.assign({
-    paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
-    font: { family: css("--font"), size: 12, color: css("--text-2") },
-    margin: { l: 48, r: 12, t: 8, b: 36 }, hovermode: "x unified",
-    legend: { orientation: "h", y: -0.16, font: { color: css("--text-2") } },
+    paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)", font: { family: css("--font"), size: 12, color: css("--text-2") },
+    margin: { l: 50, r: 14, t: 10, b: 40 }, hovermode: "x unified", legend: { orientation: "h", y: -0.18, font: { color: css("--text-2") } },
     xaxis: { gridcolor: "rgba(0,0,0,0)", linecolor: css("--line-2"), automargin: true },
     yaxis: { gridcolor: css("--line"), zerolinecolor: css("--line-2"), automargin: true },
     hoverlabel: { bgcolor: css("--surface"), bordercolor: css("--line-2"), font: { color: css("--text-1") } },
   }, extra);
 }
-const yPct = (extra = {}) => Object.assign({ ticksuffix: "%", gridcolor: css("--line"), zerolinecolor: css("--line-2"), automargin: true }, extra);
-function plota(id, dados, lay, h = 320) {
-  const el = document.getElementById(id); if (!el) return;
+function plota(el, dados, lay, h = 340) {
   el.style.height = h + "px";
   Plotly.newPlot(el, dados, lay, { displaylogo: false, responsive: true, displayModeBar: innerWidth > 700 ? "hover" : false,
     modeBarButtonsToRemove: ["lasso2d", "select2d", "autoScale2d"] });
 }
-const periodos = { buttons: [{ count: 12, label: "12m", step: "month", stepmode: "backward" }, { count: 24, label: "24m", step: "month", stepmode: "backward" },
-  { count: 1, label: "No ano", step: "year", stepmode: "todate" }, { step: "all", label: "Tudo" }] };
-const comPeriodos = () => ({ type: "date", rangeselector: Object.assign({ x: 0, y: 1.12, bgcolor: css("--surface-2"), activecolor: css("--accent-soft"),
-  font: { color: css("--text-1") } }, periodos), gridcolor: "rgba(0,0,0,0)", linecolor: css("--line-2") });
-function barH(rows, xk, yk, c, h = 380, fmt = "%{x:.3f}% do PL") {
-  return { d: [{ type: "bar", orientation: "h", x: rows.map((r) => r[xk]).reverse(), y: rows.map((r) => r[yk]).reverse(), marker: { color: c },
-    hovertemplate: "%{y}<br>" + fmt + "<extra></extra>" }],
-    l: layout({ hovermode: "closest", margin: { l: 8, r: 12, t: 4, b: 30 }, yaxis: { automargin: true, gridcolor: "rgba(0,0,0,0)", tickfont: { size: 11 } },
-      xaxis: { ticksuffix: "%", gridcolor: css("--line"), zerolinecolor: css("--line-2") } }), h };
+const cartao = (titulo, sub, corpo) => `<div class="cartao"><h3>${titulo}</h3>${sub ? `<p class="sub">${sub}</p>` : ""}${corpo}</div>`;
+function tabela(cols, linhas, extra = {}) {
+  const th = cols.map((c) => `<th class="${c.n ? "n" : ""} ${c.ord ? "ord" : ""}" ${c.ord ? `data-ord="${c.ord}"` : ""}>${c.t}</th>`).join("");
+  const tr = linhas.map((r) => `<tr class="${r._cls || ""}">${cols.map((c) => `<td class="${c.n ? "n" : c.w ? "texto" : ""}">${c.f ? c.f(r[c.k], r) : esc(r[c.k] ?? "–")}</td>`).join("")}</tr>`).join("");
+  return `<div class="tabela-wrap" style="max-height:${extra.alt || 620}px"><table><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table></div>`;
 }
-function tabela(cols, linhas, alt = 420) {
-  return `<div class="tabela-wrap" style="max-height:${alt}px"><table><thead><tr>${cols.map((c) => `<th class="${c.n ? "n" : ""}">${c.t}</th>`).join("")}</tr></thead><tbody>${
-    linhas.map((r) => `<tr>${cols.map((c) => { const v = r[c.k]; return `<td class="${c.n ? "n" : c.w ? "texto" : ""}" ${c.bg ? `style="background:${c.bg(v, r)}"` : ""}>${c.f ? c.f(v, r) : esc(v ?? "–")}</td>`; }).join("")}</tr>`).join("")
-  }</tbody></table></div>`;
-}
-function seletorMes(chave, meses, padrao) {
-  st.mes[chave] = meses.includes(st.mes[chave]) ? st.mes[chave] : (meses.includes(padrao) ? padrao : meses[meses.length - 1]);
-  return `<div class="filtros"><label>Mês <select id="mes_${chave}">${meses.slice().reverse().map((m) => `<option value="${m}" ${m === st.mes[chave] ? "selected" : ""}>${mesBR(m)}</option>`).join("")}</select></label>
-    <span class="sub">Começa no último mês com carteira aberta (meses recentes podem ter ativos confidenciais).</span></div>`;
-}
-const ligaMes = (chave) => { const s = document.getElementById("mes_" + chave); if (s) s.onchange = () => { st.mes[chave] = s.value; desenha(); }; };
-
-// ------------------------------------------------------------------ Resumo
-function resumo(el, R) {
-  const vis = new Set(fundosVisiveis().map((f) => f.nome));
-  const ks = R.kpis.filter((k) => vis.has(k.fundo));
-  el.innerHTML = `<div class="fundos">${ks.map((k) => `<div class="fcard" style="--c:${cor(k.fundo)}">
-      <div class="nome">${esc(k.fundo)}</div><div class="cnpj">${esc((R.meta.fundos.find((f) => f.nome === k.fundo) || {}).cnpj)}</div>
-      <div class="pl">R$ ${num(k.pl_mi / 1000, 2)} bi <small>de PL</small></div>
-      <dl><dt>Retorno 12 meses</dt><dd class="${sinal(k.ret12)}">${pct(k.ret12)}</dd>
-      <dt>% do CDI 12 meses</dt><dd>${pct(k.pct_cdi12, 1)}</dd><dt>Retorno no ano</dt><dd class="${sinal(k.ret_ano)}">${pct(k.ret_ano)}</dd>
-      <dt>Volatilidade anual</dt><dd>${pct(k.vol)}</dd><dt>Pior drawdown</dt><dd class="neg">${pct(k.dd)}</dd>
-      <dt>Captação líquida 12m</dt><dd class="${sinal(k.capt12_mi)}">R$ ${num(k.capt12_mi, 0)} mi</dd>
-      <dt>Cotistas</dt><dd>${num(k.cotistas, 0)}</dd><dt>Ativos na carteira</dt><dd>${num(k.ativos, 0)}</dd>
-      <dt>Carteira (aberta)</dt><dd>${mesBR(k.ult_carteira)} (${mesBR(k.carteira_aberta)})</dd></dl></div>`).join("")}</div>
-    ${card("g_acum", "Retorno acumulado x CDI", "Use os botões para mudar o período.")}
-    ${card("g_hm", "% do CDI mês a mês", "Azul: acima do CDI · laranja: abaixo")}`;
-  acumulado("g_acum", R, 400);
-  heatmap("g_hm", R, 24);
-}
-function acumulado(id, R, h) {
-  const d = fundosVisiveis().filter((f) => R.cotas[f.nome]).map((f) => ({ x: R.cotas[f.nome].datas, y: R.cotas[f.nome].acum, name: f.nome,
-    line: { color: f.cor, width: 2.2 }, hovertemplate: "%{y:.2f}%" }));
-  d.push({ x: R.cdi.datas, y: R.cdi.acum, name: "CDI", line: { color: css("--text-2"), width: 2, dash: "dash" }, hovertemplate: "%{y:.2f}%" });
-  plota(id, d, layout({ xaxis: comPeriodos(), yaxis: yPct(), margin: { l: 48, r: 12, t: 30, b: 36 } }), h);
-}
-function heatmap(id, R, ultimos) {
-  const fs = fundosVisiveis().map((f) => f.nome).filter((f) => R.cotas[f]);
-  let meses = [...new Set(R.mensal.map((r) => r.mes))].sort();
-  if (ultimos) meses = meses.slice(-ultimos);
-  const z = fs.map((f) => meses.map((m) => { const r = R.mensal.find((x) => x.fundo === f && x.mes === m); return r && r.pct_cdi != null ? r.pct_cdi * 100 : null; }));
-  plota(id, [{ type: "heatmap", x: meses.map(mesBR), y: fs, z, zmin: 0, zmax: 200, zmid: 100, xgap: 2, ygap: 2,
-    colorscale: [[0, "#eb6834"], [0.5, css("--surface-2")], [1, "#2a78d6"]], colorbar: { ticksuffix: "%", thickness: 10, len: 0.9 },
-    hovertemplate: "%{y} · %{x}<br>%{z:.0f}% do CDI<extra></extra>" }],
-    layout({ hovermode: "closest", yaxis: { autorange: "reversed", automargin: true }, xaxis: { type: "category", tickangle: -45, automargin: true } }),
-    90 + 34 * fs.length);
+const kpi = (r, v, s = "", c = "") => `<div class="kpi"><div class="r">${r}</div><div class="v ${c}">${v}</div><div class="s">${s}</div></div>`;
+function categoriasPrincipais(series, n = 7) {
+  return Object.entries(series).map(([c, ys]) => [c, ys.reduce((s, y) => s + (y || 0), 0)]).sort((a, b) => b[1] - a[1]).slice(0, n).map((x) => x[0]);
 }
 
-// ------------------------------------------------------------------ Rentabilidade
-function rentab(el, R) {
-  const fs = fundosVisiveis().filter((f) => R.cotas[f.nome]);
-  const anos = [...new Set(R.mensal.map((r) => r.mes.slice(0, 4)))].sort().reverse();
-  const linhas = anos.map((a) => { const o = { ano: a };
-    fs.forEach((f) => { const ms = R.mensal.filter((r) => r.fundo === f.nome && r.mes.startsWith(a) && r.retorno != null);
-      if (!ms.length) return; const ret = ms.reduce((p, r) => p * (1 + r.retorno), 1) - 1, cdi = ms.reduce((p, r) => p * (1 + (r.cdi || 0)), 1) - 1;
-      o[f.nome] = { ret: ret * 100, pc: cdi ? (ret / cdi) * 100 : null, n: ms.length }; });
-    return o; });
-  const celula = (v) => (v ? `<b class="${sinal(v.ret)}">${pct(v.ret)}</b> <span class="sub">· ${pct(v.pc, 0)} CDI${v.n < 12 ? ` · ${v.n}m` : ""}</span>` : "–");
-  el.innerHTML = cardHTML("Retorno por ano", tabela([{ t: "Ano", k: "ano" }, ...fs.map((f) => ({ t: `<span style="color:${f.cor}">■</span> ${esc(f.nome)}`, k: f.nome, n: 1, f: celula }))], linhas, 360),
-      "Retorno da cota no ano e % do CDI no mesmo período (anos incompletos mostram o nº de meses).") +
-    card("g_acum2", "Retorno acumulado x CDI") + card("g_hm2", "% do CDI mês a mês") +
-    `<div class="grade g2">${card("g_mes", "Retorno mensal")}${card("g_dd", "Drawdown", "Queda desde o pico anterior da cota")}</div>`;
-  acumulado("g_acum2", R, 380);
-  heatmap("g_hm2", R, 0);
-  plota("g_mes", fs.map((f) => { const r = R.mensal.filter((x) => x.fundo === f.nome && x.retorno != null);
-    return { type: "bar", x: r.map((x) => x.mes + "-15"), y: r.map((x) => x.retorno * 100), name: f.nome, marker: { color: f.cor }, hovertemplate: "%{y:.2f}%" }; }),
-    layout({ barmode: "group", xaxis: comPeriodos(), yaxis: yPct(), margin: { l: 48, r: 12, t: 30, b: 36 } }), 340);
-  plota("g_dd", fs.map((f) => ({ x: R.cotas[f.nome].datas, y: R.cotas[f.nome].dd, name: f.nome, line: { color: f.cor, width: 2 }, hovertemplate: "%{y:.2f}%" })),
-    layout({ xaxis: comPeriodos(), yaxis: yPct(), margin: { l: 48, r: 12, t: 30, b: 36 } }), 340);
-}
-
-// ------------------------------------------------------------------ Patrimonio & captacao
-function plcap(el, R) {
-  const fs = fundosVisiveis().filter((f) => R.cotas[f.nome]);
-  el.innerHTML = card("g_pl", "Patrimônio líquido", "R$ milhões") + card("g_cap", "Captação líquida mensal", "Aplicações menos resgates, R$ milhões") +
-    card("g_cot", "Número de cotistas");
-  plota("g_pl", fs.map((f) => ({ x: R.cotas[f.nome].datas, y: R.cotas[f.nome].pl, name: f.nome, line: { color: f.cor, width: 2 }, hovertemplate: "R$ %{y:,.1f} mi" })),
-    layout({ xaxis: comPeriodos(), margin: { l: 56, r: 12, t: 30, b: 36 } }), 340);
-  plota("g_cap", fs.map((f) => { const r = R.mensal.filter((x) => x.fundo === f.nome);
-    return { type: "bar", x: r.map((x) => x.mes + "-15"), y: r.map((x) => x.capt_mi), name: f.nome, marker: { color: f.cor }, hovertemplate: "R$ %{y:,.1f} mi" }; }),
-    layout({ barmode: "group", xaxis: comPeriodos(), margin: { l: 56, r: 12, t: 30, b: 36 } }), 340);
-  plota("g_cot", fs.map((f) => ({ x: R.cotas[f.nome].datas, y: R.cotas[f.nome].cotistas, name: f.nome, line: { color: f.cor, width: 2 } })),
-    layout({ xaxis: comPeriodos(), margin: { l: 56, r: 12, t: 30, b: 36 } }), 300);
-}
-
-// ------------------------------------------------------------------ Alocacao (fundo em foco)
-function alocacao(el, R) {
-  const f = st.foco, p = R.por_fundo[f]; if (!p) return (el.innerHTML = `<div class="aviso">Sem carteira para este fundo no período.</div>`);
-  const k = R.kpis.find((x) => x.fundo === f) || {};
-  const conf = p.carteira.filter((x) => String(x.ativo).startsWith("(confidencial)")).reduce((s, x) => s + x.perc_pl, 0);
-  const ult = Object.fromEntries(Object.entries(p.alocacao.series).map(([c, y]) => [c, y[y.length - 1]]));
-  const topCat = Object.entries(ult).filter(([c]) => c !== "Outros").sort((a, b) => b[1] - a[1])[0] || ["–", null];
-  el.innerHTML = `<div class="kpis">${kpi("Carteira", mesBR(p.ult_mes), "último mês publicado")}${kpi("Ativos", num(k.ativos, 0), "posições distintas")}
-      ${kpi("Maior categoria", pct(topCat[1], 1), esc(topCat[0]))}${kpi("Top 10 emissores", pct(k.top10_emissores, 1), "concentração")}
-      ${kpi("Confidencial", pct(conf, 1), "do PL ainda não divulgado")}</div>
-    ${card("g_area", "Composição ao longo do tempo", "% do PL por categoria (sem derivativos)")}
-    <div class="grade g2">${card("g_cat", `Alocação em ${mesBR(p.ult_mes)}`, "% do PL por categoria")}${card("g_emi", "Maiores emissores", "% do PL")}</div>
-    <div class="cartao"><h3>Carteira de ${mesBR(p.ult_mes)}</h3><p class="sub">Uma linha por ativo final (look-through). Filtre por texto ou categoria.</p>
-      <div class="filtros"><input id="filtro" placeholder="Buscar ativo, emissor, código..."><select id="fcat"><option value="">Todas as categorias</option>${
-        [...new Set(p.carteira.map((x) => x.categoria))].sort().map((c) => `<option>${esc(c)}</option>`).join("")}</select></div><div id="t_cart"></div></div>`;
-  plota("g_area", Object.entries(p.alocacao.series).map(([c, y]) => ({ x: p.alocacao.meses.map((m) => m + "-15"), y, name: c, stackgroup: "a",
-    line: { width: 0.6, color: css("--surface") }, fillcolor: corCat(c), hovertemplate: "%{y:.1f}%" })),
-    layout({ xaxis: comPeriodos(), yaxis: yPct(), margin: { l: 48, r: 12, t: 30, b: 36 } }), 400);
-  const cats = Object.entries(ult).sort((a, b) => b[1] - a[1]).map(([c, v]) => ({ c, v }));
-  plota("g_cat", [{ type: "bar", orientation: "h", y: cats.map((x) => x.c).reverse(), x: cats.map((x) => x.v).reverse(), marker: { color: cats.map((x) => corCat(x.c)).reverse() },
-    hovertemplate: "%{y}: %{x:.2f}%<extra></extra>" }], layout({ hovermode: "closest", margin: { l: 8, r: 12, t: 4, b: 30 },
-    yaxis: { automargin: true, gridcolor: "rgba(0,0,0,0)" }, xaxis: { ticksuffix: "%", gridcolor: css("--line") } }), 380);
-  const e = barH(p.emissores, "perc_pl", "emissor", CORES[0]); plota("g_emi", e.d, e.l, 380);
-  const cols = [{ t: "Categoria", k: "categoria" }, { t: "Ativo", k: "ativo", w: 1 }, { t: "Código", k: "codigo" }, { t: "Emissor", k: "emissor", w: 1 },
-    { t: "% do PL", k: "perc_pl", n: 1, f: (v) => pct(v, 3) }, { t: "Via (veículo)", k: "veiculo", w: 1 }];
-  const pinta = () => { const q = $("#filtro").value.toLowerCase(), c = $("#fcat").value;
-    const r = p.carteira.filter((x) => (!c || x.categoria === c) && (!q || [x.ativo, x.emissor, x.codigo].join(" ").toLowerCase().includes(q)));
-    $("#t_cart").innerHTML = tabela(cols, r.slice(0, 800), 480) + `<p class="sub">${num(r.length, 0)} linhas · ${pct(r.reduce((s, x) => s + x.perc_pl, 0), 2)} do PL${r.length > 800 ? " · mostrando 800 (CSV completo em Dados & fontes)" : ""}</p>`; };
-  $("#filtro").oninput = pinta; $("#fcat").onchange = pinta; pinta();
-}
-
-// ------------------------------------------------------------------ Credito
-function credito(el, R) {
-  const f = st.foco, p = R.por_fundo[f]; if (!p) return; const c = p.credito;
-  el.innerHTML = `<div class="aviso">Carteira de <b>${mesBR(c.mes)}</b> (último mês com menos de 5% do PL confidencial). Taxas e duration das debêntures: marcação ANBIMA de <b>${dataBR(R.meta.anbima_data)}</b>.</div>
-    <div class="kpis">${kpi("Debêntures", pct(c.deb_pl, 1), "do PL")}${kpi("Com taxa ANBIMA", pct(c.cobertura, 0), "das debêntures")}
-      ${kpi("Spread médio DI +", pct(c.spread_di), `a.a. · ${pct(c.pl_di, 1)} do PL`)}${kpi("Taxa média IPCA +", pct(c.taxa_ipca), `a.a. · ${pct(c.pl_ipca, 1)} do PL`)}
-      ${kpi("Duration média", num(c.duration) + " anos", "debêntures com taxa")}</div>
-    <div class="grade g2">${card("g_sc", "Taxa x duration por debênture", "Tamanho = % do PL · passe o mouse para ver o ativo")}${card("g_tipo", "Debêntures por indexador", "% do PL")}</div>
-    <div id="hist"></div>
-    ${cardHTML("Debêntures da carteira", `<div id="t_deb"></div>`, "Marcação ANBIMA do dia; “–” = sem taxa indicativa publicada")}
-    <div class="grade g3">${card("g_idx", "Indexador (informado à CVM)", "Depósitos bancários e crédito privado")}${card("g_prz", "Prazo até o vencimento", "% do PL")}${card("g_rat", "Rating", "% do PL")}</div>
-    ${cardHTML("Resumo por categoria", `<div id="t_res"></div>`, "Médias ponderadas pelo % do PL, só onde a CVM informa a taxa")}`;
-  plota("g_sc", ["DI +", "IPCA +"].map((tp, i) => { const r = c.debs.filter((x) => x.tipo === tp && x.taxa_ind != null);
-    return { type: "scatter", mode: "markers", name: tp, x: r.map((x) => x.duration_anos), y: r.map((x) => x.taxa_ind), text: r.map((x) => x.ativo),
-      marker: { size: r.map((x) => 7 + Math.sqrt(Math.max(x.perc_pl, 0)) * 12), color: CORES[i], opacity: 0.85, line: { color: css("--surface"), width: 1.5 } },
-      hovertemplate: "%{text}<br>duration %{x:.2f} anos · taxa %{y:.2f}% a.a.<extra></extra>" }; }),
-    layout({ hovermode: "closest", legend: { x: 0.01, y: 0.99, bgcolor: "rgba(0,0,0,0)" }, xaxis: { title: "duration (anos)", gridcolor: css("--line"), zeroline: false },
-      yaxis: { title: "taxa indicativa (% a.a.)", gridcolor: css("--line"), zeroline: false } }), 360);
-  const t = barH(c.por_tipo.slice().sort((a, b) => b.perc_pl - a.perc_pl), "perc_pl", "t", CORES[0]); plota("g_tipo", t.d, t.l, 360);
-  if (c.hist && c.hist.datas && c.hist.datas.length > 1) {
-    $("#hist").outerHTML = `<div class="grade g2">${card("g_h1", "Spread médio DI + ao longo dos dias", "Mesma carteira, marcação ANBIMA de cada dia guardado")}${card("g_h2", "Duration média ao longo dos dias", `${R.meta.anbima_dias} dias guardados; cresce a cada dia de uso`)}</div>`;
-    plota("g_h1", [{ x: c.hist.datas, y: c.hist.spread_di, mode: "lines+markers", line: { color: CORES[0], width: 2 }, name: "DI +", hovertemplate: "%{y:.3f}%" }], layout({ yaxis: yPct() }), 260);
-    plota("g_h2", [{ x: c.hist.datas, y: c.hist.duration, mode: "lines+markers", line: { color: CORES[2], width: 2 }, name: "duration", hovertemplate: "%{y:.2f} anos" }], layout(), 260);
-  }
-  $("#t_deb").innerHTML = tabela([{ t: "Ativo", k: "ativo", w: 1 }, { t: "Código", k: "codigo" }, { t: "% do PL", k: "perc_pl", n: 1, f: (v) => pct(v, 3) },
-    { t: "Indexador", k: "indice" }, { t: "Taxa indicativa", k: "taxa_ind", n: 1, f: (v) => pct(v) }, { t: "Duration (anos)", k: "duration_anos", n: 1, f: (v) => num(v) },
-    { t: "% PU par", k: "pct_par", n: 1, f: (v) => num(v) }, { t: "Vencimento", k: "venc" }, { t: "Via (veículo)", k: "veiculo", w: 1 }], c.debs, 400);
-  const b1 = barH(c.indexador.slice().sort((a, b) => b.perc_pl - a.perc_pl), "perc_pl", "k", CORES[0]); plota("g_idx", b1.d, b1.l, 300);
-  plota("g_prz", [{ type: "bar", x: c.prazo.map((x) => x.k), y: c.prazo.map((x) => x.perc_pl), marker: { color: CORES[2] }, hovertemplate: "%{x}: %{y:.2f}% do PL<extra></extra>" }],
-    layout({ hovermode: "closest", yaxis: yPct() }), 300);
-  const b3 = barH(c.rating.slice().sort((a, b) => b.perc_pl - a.perc_pl).slice(0, 12), "perc_pl", "k", CORES[6]); plota("g_rat", b3.d, b3.l, 300);
-  $("#t_res").innerHTML = tabela([{ t: "Categoria", k: "categoria" }, { t: "% do PL", k: "perc_pl", n: 1, f: (v) => pct(v) },
-    { t: "% PL c/ taxa", k: "perc_com_taxa", n: 1, f: (v) => pct(v) }, { t: "% do índice", k: "pct_indexador", n: 1, f: (v) => num(v) },
-    { t: "Cupom/spread", k: "cupom", n: 1, f: (v) => num(v) }, { t: "Taxa pré", k: "taxa_pre", n: 1, f: (v) => num(v) },
-    { t: "Prazo médio (anos)", k: "prazo", n: 1, f: (v) => num(v) }], c.resumo, 360);
-}
-
-// ------------------------------------------------------------------ Movimentacoes
-function movimentos(el, R) {
-  const f = st.foco, p = R.por_fundo[f]; if (!p) return; const mv = p.movimentos;
-  el.innerHTML = seletorMes("mov", mv.meses, p.mes_aberto) + `<div id="cont"></div>`;
-  ligaMes("mov");
-  const e = mv.por_mes[st.mes.mov] || {};
-  $("#cont").innerHTML = `<div class="kpis">${kpi("Posições novas", num(e.novos, 0), pct(e.pct_novos) + " do PL")}${kpi("Posições zeradas", num(e.zerados, 0), pct(e.pct_zerados) + " do PL saiu")}
-      ${kpi("Compras no mês", pct((e.compras || []).reduce((s, x) => s + x.compra, 0), 2), "top 15, % do PL")}${kpi("Vendas no mês", pct((e.vendas || []).reduce((s, x) => s + x.venda, 0), 2), "top 15, % do PL")}</div>
-    <div class="grade g2">${card("g_c", `Maiores compras · ${mesBR(st.mes.mov)}`, "% do PL do fundo (look-through)")}${card("g_v", `Maiores vendas · ${mesBR(st.mes.mov)}`, "% do PL do fundo (look-through)")}</div>
-    ${card("g_giro", "Compras e vendas por mês", "% do PL · vendas para baixo")}`;
-  const c = barH(e.compras || [], "compra", "ativo", CORES[0]); plota("g_c", c.d, c.l, 440);
-  const v = barH(e.vendas || [], "venda", "ativo", CORES[1]); plota("g_v", v.d, v.l, 440);
-  plota("g_giro", [{ type: "bar", x: mv.meses.map((m) => m + "-15"), y: mv.compras, name: "compras", marker: { color: CORES[0] }, hovertemplate: "%{y:.2f}%" },
-    { type: "bar", x: mv.meses.map((m) => m + "-15"), y: mv.vendas.map((x) => -x), name: "vendas", marker: { color: CORES[1] }, hovertemplate: "%{y:.2f}%" }],
-    layout({ barmode: "relative", xaxis: comPeriodos(), yaxis: yPct(), margin: { l: 48, r: 12, t: 30, b: 36 } }), 320);
-}
-
-// ------------------------------------------------------------------ Derivativos & moeda
-function derivativos(el, R) {
-  const f = st.foco, p = R.por_fundo[f]; if (!p) return; const d = p.derivativos;
-  const ult = (a) => (a && a.length ? a[a.length - 1] : null);
-  el.innerHTML = `<div class="kpis">${kpi("Derivativos (último mês)", d.meses.length ? pct(Object.values(d.series).reduce((s, y) => s + Math.abs(ult(y) || 0), 0), 1) : "–", "soma dos nocionais em valor absoluto")}
-      ${kpi("Investimento no exterior", pct(ult(d.moeda.exterior), 2), "do PL")}${kpi("Futuros de dólar", pct(ult(d.moeda.dolar), 2), "nocional, % do PL")}</div>
-    ${d.meses.length ? card("g_der", "Derivativos por tipo de contrato", "% do PL (valor informado, em geral nocional)") : `<div class="aviso">Sem derivativos na carteira no período.</div>`}
-    ${d.atual.length ? cardHTML("Posições em derivativos no último mês", `<div id="t_der"></div>`) : ""}
-    ${card("g_fx", "Exposição a moeda estrangeira", "% do PL")}`;
-  if (d.meses.length) plota("g_der", Object.entries(d.series).map(([k, y], i) => ({ type: "bar", x: d.meses.map((m) => m + "-15"), y, name: k, marker: { color: CORES[i % 8] }, hovertemplate: "%{y:.2f}%" })),
-    layout({ barmode: "relative", xaxis: comPeriodos(), yaxis: yPct(), margin: { l: 48, r: 12, t: 30, b: 36 } }), 380);
-  if (d.atual.length) $("#t_der").innerHTML = tabela([{ t: "Categoria", k: "categoria" }, { t: "Contrato", k: "tipo_ativo" }, { t: "Ativo", k: "ativo", w: 1 },
-    { t: "Via (veículo)", k: "veiculo", w: 1 }, { t: "% do PL", k: "perc_pl", n: 1, f: (v) => pct(v, 3) }], d.atual, 300);
-  plota("g_fx", [{ x: d.moeda.meses.map((m) => m + "-15"), y: d.moeda.exterior, name: "Investimento no exterior", line: { color: CORES[3], width: 2 }, hovertemplate: "%{y:.2f}%" },
-    { x: d.moeda.meses.map((m) => m + "-15"), y: d.moeda.dolar, name: "Futuros de dólar (nocional)", line: { color: CORES[6], width: 2 }, hovertemplate: "%{y:.2f}%" }],
-    layout({ xaxis: comPeriodos(), yaxis: yPct(), margin: { l: 48, r: 12, t: 30, b: 36 } }), 300);
-}
-
-// ------------------------------------------------------------------ Marcacao estimada
-function marcacao(el, R) {
-  const f = st.foco, p = R.por_fundo[f]; if (!p) return; const m = p.marcacao;
-  if (!m) return (el.innerHTML = `<div class="aviso">Precisa de pelo menos dois meses de carteira.</div>`);
-  el.innerHTML = card("g_mar", "Efeito de marcação por categoria x retorno real da cota", "Barras: variação de preço das posições mantidas (% do PL) · linha: retorno da cota no mês") +
-    seletorMes("mar", m.meses, p.mes_aberto) + `<div id="cont"></div>`;
-  ligaMes("mar");
-  const d = Object.entries(m.series).map(([c, y]) => ({ type: "bar", x: m.meses.map((x) => x + "-15"), y, name: c, marker: { color: corCat(c) }, hovertemplate: "%{y:.2f}%" }));
-  d.push({ x: m.meses.map((x) => x + "-15"), y: m.real, name: "retorno real da cota", mode: "lines+markers", line: { color: css("--text-1"), width: 2 }, hovertemplate: "%{y:.2f}%" });
-  plota("g_mar", d, layout({ barmode: "relative", xaxis: comPeriodos(), yaxis: yPct(), margin: { l: 48, r: 12, t: 30, b: 36 } }), 400);
-  const e = m.por_mes[st.mes.mar] || { altas: [], quedas: [] };
-  const cols = [{ t: "Ativo", k: "ativo", w: 1 }, { t: "Categoria", k: "categoria" }, { t: "% do PL", k: "resultado_pct", n: 1, f: (v) => `<span class="${sinal(v)}">${pct(v, 3)}</span>` }];
-  $("#cont").innerHTML = `<div class="grade g2">${card("g_alt", `Maiores altas de preço · ${mesBR(st.mes.mar)}`)}${card("g_que", `Maiores quedas de preço · ${mesBR(st.mes.mar)}`, "Inclui pagamentos de juros/amortização")}</div>
-    <div class="grade g2">${cardHTML("Maiores altas no período inteiro", tabela(cols, m.periodo.altas, 420))}${cardHTML("Maiores quedas no período inteiro", tabela(cols, m.periodo.quedas, 420))}</div>`;
-  const a = barH(e.altas, "resultado_pct", "ativo", CORES[0]); plota("g_alt", a.d, a.l, 420);
-  const q = barH(e.quedas.slice().reverse(), "resultado_pct", "ativo", CORES[1]); plota("g_que", q.d, q.l, 420);
-}
-
-// ------------------------------------------------------------------ Comparacao
-function comparacao(el, R) {
-  const vis = fundosVisiveis().map((f) => f.nome);
-  const al = R.comparacao.alocacao, em = R.comparacao.emissores;
-  const idx = (lista) => vis.map((f) => lista.indexOf(f)).filter((i) => i >= 0);
-  const fundoCols = (lista) => idx(lista).map((i) => ({ t: `<span style="color:${cor(lista[i])}">■</span> ${esc(lista[i])}`, k: i + 1, n: 1,
-    f: (v) => num(v), bg: (v) => `rgba(42,120,214,${Math.min(Math.abs(v || 0) / 60, 0.55).toFixed(3)})` }));
-  const cr = R.meta.fundos.filter((f) => R.por_fundo[f.nome] && vis.includes(f.nome)).map((f) => ({ fundo: f.nome, ...R.por_fundo[f.nome].credito }));
-  el.innerHTML = cardHTML("Alocação por categoria na última carteira", tabela([{ t: "Categoria", k: 0 }, ...fundoCols(al.fundos)], al.linhas, 440), "% do PL · cor mais forte = peso maior") +
-    cardHTML("Crédito: debêntures com marcação ANBIMA", tabela([{ t: "Fundo", k: "fundo", f: (v) => `<span style="color:${cor(v)}">■</span> ${esc(v)}` },
-      { t: "Carteira", k: "mes", f: mesBR }, { t: "Debêntures (% PL)", k: "deb_pl", n: 1, f: (v) => num(v, 1) }, { t: "Cobertura ANBIMA", k: "cobertura", n: 1, f: (v) => pct(v, 0) },
-      { t: "Spread DI +", k: "spread_di", n: 1, f: (v) => pct(v) }, { t: "Taxa IPCA +", k: "taxa_ipca", n: 1, f: (v) => pct(v) },
-      { t: "Duration (anos)", k: "duration", n: 1, f: (v) => num(v) }], cr, 320), "Última carteira aberta de cada fundo") +
-    (em.linhas.length ? cardHTML("Emissores em comum", tabela([{ t: "Emissor", k: 0, w: 1 }, ...fundoCols(em.fundos)], em.linhas, 440), "% do PL de cada fundo no mesmo emissor") : "") +
-    card("g_rr", "Risco x retorno (12 meses)", "Volatilidade anual x % do CDI · tamanho = PL");
-  const ks = R.kpis.filter((k) => vis.includes(k.fundo));
-  plota("g_rr", ks.map((k) => ({ type: "scatter", mode: "markers+text", x: [k.vol], y: [k.pct_cdi12], text: [k.fundo], textposition: "top center", name: k.fundo,
-    textfont: { color: css("--text-1") }, marker: { size: 14 + Math.sqrt(Math.max(k.pl_mi || 1, 1)) / 2.5, color: cor(k.fundo), opacity: 0.9, line: { color: css("--surface"), width: 2 } },
-    hovertemplate: `${esc(k.fundo)}<br>volatilidade %{x:.2f}% · %{y:.1f}% do CDI<extra></extra>` })),
-    layout({ hovermode: "closest", showlegend: false, xaxis: { title: "volatilidade anual (%)", gridcolor: css("--line"), zeroline: false },
-      yaxis: { title: "% do CDI em 12 meses", gridcolor: css("--line"), zeroline: false } }), 420);
-}
-
-// ------------------------------------------------------------------ Dados & fontes
-function dados(el, R) {
-  el.innerHTML = cardHTML("Downloads", `<p class="links"><a href="/api/csv/${st.chave}/carteira">Carteira look-through (CSV)</a><a href="/api/csv/${st.chave}/cotas">Cotas diárias (CSV)</a></p>
-      <p class="sub">CSV com ponto e vírgula e vírgula decimal (abre direto no Excel em português). Gerado em ${esc(R.meta.gerado)}.</p>`) +
-    cardHTML("Fontes", `<ul class="sub"><li><b>CVM, dados abertos</b> (dados.cvm.gov.br): CDA (carteira mensal de todos os fundos), informe diário (cota, PL, captação, cotistas), cadastro de fundos.</li>
-      <li><b>ANBIMA</b>: mercado secundário de debêntures, taxa indicativa diária (o arquivo gratuito guarda ~15 dias úteis; o painel guarda os dias que baixar).</li>
-      <li><b>Banco Central</b>: CDI diário, série SGS 12.</li></ul>`) +
-    cardHTML("Como ler os números", `<ul class="sub"><li><b>Look-through</b>: cotas de outros fundos são abertas até o ativo final; % = produto dos pesos ao longo da cadeia.</li>
-      <li><b>Confidencial</b>: o gestor pode omitir ativos por até 6 meses; seções de carteira usam o último mês aberto.</li>
-      <li><b>Derivativos</b> entram pelo valor informado (em geral nocional) e ficam fora da soma de 100%.</li>
-      <li><b>Ajuste carteira x PL</b>: quando a carteira informada não fecha com o PL, a diferença aparece nessa linha.</li>
-      <li><b>Marcação (estimada)</b>: variação de preço das posições mantidas; cupons e amortizações aparecem como queda.</li></ul>`);
-}
-
-// ------------------------------------------------------------------ adicionar fundos
-const dlg = $("#dlg-add");
-$("#btn-add").onclick = () => { st.novos = []; desenhaNovos(); $("#log-add").hidden = true; dlg.showModal(); $("#busca").focus(); };
-function desenhaNovos() {
-  $("#novos").innerHTML = st.novos.map((f, i) => `<li><div>${esc(f.nome)}<small>${esc(f.cnpj)}</small></div><button type="button" data-i="${i}" aria-label="Remover">×</button></li>`).join("");
-  $("#novos").querySelectorAll("button").forEach((b) => (b.onclick = () => { st.novos.splice(+b.dataset.i, 1); desenhaNovos(); }));
-}
-let tBusca, sel = -1;
-$("#busca").addEventListener("input", (e) => {
-  clearTimeout(tBusca); const q = e.target.value;
-  tBusca = setTimeout(async () => {
-    if (q.length < 2) return ($("#sugestoes").hidden = true);
-    const r = await (await fetch("/api/busca?q=" + encodeURIComponent(q))).json(); sel = -1;
-    $("#sugestoes").innerHTML = r.map((f) => `<li data-c="${esc(f.cnpj)}" data-n="${esc(f.nome)}">${esc(f.nome)}<small>${esc(f.cnpj)}${f.ativo ? "" : " · cancelado"}</small></li>`).join("") || "<li>Nada encontrado</li>";
-    $("#sugestoes").hidden = false;
-  }, 250);
-});
-$("#busca").addEventListener("keydown", (e) => {
-  const li = [...$("#sugestoes").querySelectorAll("li[data-c]")];
-  if (e.key === "Enter") e.preventDefault();
-  if (!li.length) return;
-  if (e.key === "ArrowDown" || e.key === "ArrowUp") { sel = (sel + (e.key === "ArrowDown" ? 1 : -1) + li.length) % li.length; li.forEach((x, i) => x.classList.toggle("ativo", i === sel)); e.preventDefault(); }
-  else if (e.key === "Enter" && sel >= 0) escolhe(li[sel]);
-});
-$("#sugestoes").addEventListener("click", (e) => { const li = e.target.closest("li[data-c]"); if (li) escolhe(li); });
-function escolhe(li) {
-  if (!st.novos.some((f) => f.cnpj === li.dataset.c)) st.novos.push({ cnpj: li.dataset.c, nome: li.dataset.n });
-  $("#busca").value = ""; $("#sugestoes").hidden = true; desenhaNovos();
-}
-$("#btn-processar").onclick = async (e) => {
-  e.preventDefault();
-  if (!st.novos.length) return dlg.close();
-  const atuais = st.R.meta.fundos.map((f) => ({ cnpj: f.cnpj, nome: f.nome, curto: f.nome }));
-  const todos = atuais.concat(st.novos.filter((n) => !atuais.some((a) => a.cnpj === n.cnpj))).slice(0, 8);
-  const log = $("#log-add"); log.hidden = false; log.textContent = "Processando...";
+function desenha() {
+  const el = $("#conteudo");
   try {
-    const r = await (await fetch("/api/carregar", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fundos: todos, desde: st.R.meta.desde }) })).json();
-    if (r.job) for (;;) { await espera(2000); const s = await (await fetch("/api/status/" + r.job)).json();
-      log.textContent = s.log.join("\n") || "Baixando arquivos da CVM..."; if (s.status === "erro") throw new Error(s.erro); if (s.status === "ok") break; }
-    await abre(r.chave); dlg.close();
-  } catch (err) { log.textContent += "\nErro: " + err.message; }
-};
+    if (st.aba === "carteira") carteira(el);
+    else if (st.aba === "retorno") retorno(el);
+    else consolidado(el);
+  } catch (e) { el.innerHTML = `<div class="vazio">Erro ao desenhar: ${esc(e.message)}</div>`; console.error(e); }
+}
+function cabecalhoFundo(el, f, extra = "") {
+  el.innerHTML = `<div class="cab"><div class="titulo-fundo"><h2>${esc(f.nome)} ${f.nosso ? '<span class="tag">NOSSO</span>' : ""}</h2>
+    <p class="sub">${esc(f.cnpj)}${f.pl ? ` · PL R$ ${num(f.pl, 0)} mm` : ""}</p></div><div class="controles" id="ctl">${extra}</div></div><div id="corpo"></div>`;
+  $("#ctl").prepend(campoBusca((x) => { st.fundo = x.id; desenha(); }, "Trocar de fundo: digite nome ou CNPJ...", st.aba === "carteira"));
+}
+
+// ------------------------------------------------------------------ CARTEIRA
+async function carteira(el) {
+  const f = fundoPor(st.fundo);
+  if (!f.tem_carteira) { cabecalhoFundo(el, f); $("#corpo").innerHTML = `<div class="vazio">A CVM não tem carteira deste fundo no período.</div>`; return; }
+  cabecalhoFundo(el, f);
+  $("#corpo").innerHTML = `<div class="vazio">Carregando ${esc(f.nome)}...</div>`;
+  const D = await detalhe(f.id);
+  if (st.fundo !== f.id || st.aba !== "carteira") return;
+  const ms = D.carteira.map((x) => x.mes);
+  const aberto = [...D.carteira].reverse().find((x) => x.conf < 5) || D.carteira[D.carteira.length - 1];
+  const mes = ms.includes(st.mesCart[f.id]) ? st.mesCart[f.id] : aberto.mes;
+  const C = D.carteira.find((x) => x.mes === mes);
+  $("#ctl").insertAdjacentHTML("beforeend", `<label>Carteira <select id="mes">${ms.slice().reverse().map((m) => `<option value="${m}" ${m === mes ? "selected" : ""}>${mesBR(m)}${D.carteira.find((x) => x.mes === m).conf >= 5 ? " (confid.)" : ""}</option>`).join("")}</select></label>
+    <a class="botao" href="/api/csv/${f.id}" title="Carteira look-through completa (CSV)">CSV</a>`);
+  $("#mes").onchange = (e) => { st.mesCart[f.id] = e.target.value; desenha(); };
+
+  const linhas = C.cats.map((c) => ({ ...c })).concat([{ ...C.total, _cls: "total", categoria: "Total ponderado" }]);
+  if (C.deriv.length) {
+    linhas.push({ categoria: "Derivativos (nocional estimado)", _cls: "secao" });
+    C.deriv.forEach((d) => linhas.push({ categoria: `${d.contrato} · ${d.lado}${d.contratos ? ` · ${num(d.contratos, 0)} contratos` : ""}`, perc: null, fin: d.fin, spread: null, duration: d.prazo, _der: 1 }));
+  }
+  const tab = tabela([
+    { t: "Categoria", k: "categoria", w: 1 },
+    { t: "% PL", k: "perc", n: 1, f: (v, r) => (r._cls === "secao" ? "" : r._der ? "–" : pct(v)) },
+    { t: "Financeiro (R$ mm)", k: "fin", n: 1, f: (v, r) => (r._cls === "secao" ? "" : num(v)) },
+    { t: "Spread CDI+ (% a.a.)", k: "spread", n: 1, f: (v, r) => (r._cls === "secao" || r._der ? "" : num(v)) },
+    { t: "Duration (anos)", k: "duration", n: 1, f: (v, r) => (r._cls === "secao" ? "" : num(v)) },
+  ], linhas);
+  const conf = C.conf >= 0.5 ? ` · ${pct(C.conf, 1)} do PL ainda confidencial` : "";
+  $("#corpo").innerHTML = cartao(`Carteira de ${mesBR(mes)} por categoria`, `PL R$ ${num(C.pl_mm, 2)} mm · look-through (cotas de fundos abertas até o ativo)${conf}`, tab +
+    `<p class="nota">Spread CDI+ = equivalente em CDI: debêntures pela taxa indicativa ANBIMA de ${dataBR(C.anbima)} (IPCA+ menos a NTN-B de mesma duration); CDBs, LFs e crédito pela taxa informada à CVM; caixa e compromissadas = 0. FIDCs e cotas de fundos não têm taxa pública. Médias ponderadas pelo % do PL, só onde há taxa.</p>`) +
+    `<div class="grade g2">${cartao("% do PL por categoria", "Evolução mensal (sem derivativos)", '<div id="g_aloc"></div>')}${cartao("Spread CDI+ por categoria", "Média ponderada no mês, % a.a. (debêntures só nos meses com marcação ANBIMA guardada)", '<div id="g_spread"></div>')}</div>
+    <div class="grade g-tabela">${cartao("Top 10 ativos", `% do PL em ${mesBR(mes)}`, '<div id="t_top"></div>')}${cartao("Maiores grupos econômicos", "% do PL", '<div id="g_grupos"></div>')}</div>`;
+
+  $("#t_top").innerHTML = tabela([{ t: "Ativo", k: "ativo", w: 1 }, { t: "Grupo econômico", k: "grupo", w: 1 }, { t: "% PL", k: "perc", n: 1, f: (v) => pct(v) },
+    { t: "Spread CDI+", k: "spread", n: 1, f: (v) => num(v) }, { t: "Duration", k: "duration", n: 1, f: (v) => num(v) }], C.top);
+  const series = {};
+  D.carteira.forEach((x, i) => x.cats.forEach((c) => { (series[c.categoria] ||= Array(D.carteira.length).fill(0))[i] = c.perc; }));
+  const tops = categoriasPrincipais(series), cores = st.V.cat_cores;
+  const agrup = tops.map((c, i) => ({ c, y: series[c], cor: cores[i % cores.length] }));
+  agrup.push({ c: "Outros", y: ms.map((_, i) => Object.entries(series).filter(([c]) => !tops.includes(c)).reduce((s, [, y]) => s + (y[i] || 0), 0)), cor: "#9aa0a6" });
+  plota($("#g_aloc"), agrup.map((a) => ({ x: ms.map((m) => m + "-15"), y: a.y, name: a.c, stackgroup: "a", line: { width: 0.5, color: css("--surface") },
+    fillcolor: a.cor, hovertemplate: "%{y:.1f}%" })), layout({ yaxis: { ticksuffix: "%", gridcolor: css("--line") } }), 360);
+  const sp = {};
+  D.carteira.forEach((x, i) => x.cats.forEach((c) => { if (c.spread != null) (sp[c.categoria] ||= Array(D.carteira.length).fill(null))[i] = c.spread; }));
+  plota($("#g_spread"), tops.filter((c) => sp[c]).map((c) => ({ x: ms.map((m) => m + "-15"), y: sp[c], name: c, mode: "lines+markers", connectgaps: false,
+    line: { color: cores[tops.indexOf(c) % cores.length], width: 2 }, marker: { size: 4 }, hovertemplate: "%{y:.2f}%" })),
+    layout({ yaxis: { ticksuffix: "%", gridcolor: css("--line") } }), 360);
+  const g = C.grupos.slice().reverse();
+  plota($("#g_grupos"), [{ type: "bar", orientation: "h", x: g.map((x) => x.perc), y: g.map((x) => x.grupo), marker: { color: cores[0] }, hovertemplate: "%{y}: %{x:.2f}% do PL<extra></extra>" }],
+    layout({ hovermode: "closest", margin: { l: 8, r: 14, t: 6, b: 30 }, yaxis: { automargin: true, gridcolor: "rgba(0,0,0,0)" }, xaxis: { ticksuffix: "%", gridcolor: css("--line") } }), 400);
+}
+
+// ------------------------------------------------------------------ RETORNO
+function periodoMeses(ms, chave) {
+  if (!ms.includes(st[chave].de)) st[chave].de = ms[Math.max(0, ms.length - 12)];
+  if (!ms.includes(st[chave].ate)) st[chave].ate = ms[ms.length - 1];
+  const opt = (v) => ms.slice().reverse().map((m) => `<option value="${m}" ${m === v ? "selected" : ""}>${mesBR(m)}</option>`).join("");
+  return `<label>De <select id="de">${opt(st[chave].de)}</select></label><label>até <select id="ate">${opt(st[chave].ate)}</select></label>
+    ${[["6m", 6], ["12m", 12], ["24m", 24], ["No ano", "ano"], ["Tudo", 999]].map(([t, n]) => `<button class="botao" data-p="${n}">${t}</button>`).join("")}`;
+}
+function ligaPeriodo(ms, chave) {
+  $("#de").onchange = (e) => { st[chave].de = e.target.value; desenha(); };
+  $("#ate").onchange = (e) => { st[chave].ate = e.target.value; desenha(); };
+  document.querySelectorAll("[data-p]").forEach((b) => (b.onclick = () => {
+    const ult = ms[ms.length - 1], n = b.dataset.p;
+    st[chave].ate = ult;
+    st[chave].de = n === "ano" ? (ms.find((m) => m.startsWith(ult.slice(0, 4))) || ms[0]) : ms[Math.max(0, ms.length - +n)];
+    desenha();
+  }));
+}
+function estatPeriodo(f, i0, i1) {
+  // retorno, vol anual e drawdown da cota entre os indices i0..i1 de V.datas (precisa existir no inicio e no fim)
+  const c = f.cota; if (!c || !c.length) return null;
+  let a = i0; while (a <= i1 && c[a] == null) a++;
+  if (a > i0 + 6 || a > i1) return null;
+  let b = i1; while (b > a && c[b] == null) b--;
+  if (b < i1 - 6) return null;
+  const rets = []; let pico = c[a], dd = 0, ant = c[a];
+  for (let k = a + 1; k <= b; k++) { if (c[k] == null) continue; rets.push(Math.log(c[k] / ant)); ant = c[k]; pico = Math.max(pico, c[k]); dd = Math.min(dd, c[k] / pico - 1); }
+  const m = rets.reduce((s, x) => s + x, 0) / Math.max(rets.length, 1);
+  const vol = Math.sqrt(rets.reduce((s, x) => s + (x - m) ** 2, 0) / Math.max(rets.length - 1, 1) * 252);
+  const cdi = st.V.cdi[b] / st.V.cdi[a] - 1, ret = c[b] / c[a] - 1;
+  return { ret: ret * 100, cdi: cdi * 100, pcdi: cdi ? (ret / cdi) * 100 : null, vol: vol * 100, dd: dd * 100 };
+}
+function indicesDatas(de, ate) {
+  const D = st.V.datas;
+  let i0 = D.findIndex((d) => d >= de); if (i0 < 0) i0 = D.length - 1;
+  let i1 = D.length - 1; while (i1 > 0 && D[i1] > ate) i1--;
+  return [Math.max(0, i0 - 1), i1];   // inclui a cota do dia anterior ao inicio (retorno do 1o dia)
+}
+async function retorno(el) {
+  const f = fundoPor(st.fundo);
+  cabecalhoFundo(el, f);
+  if (!f.tem_carteira) { $("#corpo").innerHTML = `<div class="vazio">A CVM não tem carteira deste fundo no período.</div>`; return; }
+  $("#corpo").innerHTML = `<div class="vazio">Carregando ${esc(f.nome)}...</div>`;
+  const D = await detalhe(f.id);
+  if (st.fundo !== f.id || st.aba !== "retorno") return;
+  const R = D.retorno, ms = R.meses.map((x) => x.mes);
+  if (!ms.length) { $("#corpo").innerHTML = `<div class="vazio">Sem meses suficientes para calcular retorno.</div>`; return; }
+  $("#ctl").insertAdjacentHTML("beforeend", periodoMeses(ms, "ret"));
+  ligaPeriodo(ms, "ret");
+  const j0 = ms.indexOf(st.ret.de), j1 = ms.indexOf(st.ret.ate);
+  const [a, b] = j0 <= j1 ? [j0, j1] : [j1, j0];
+  const J = Array.from({ length: b - a + 1 }, (_, k) => a + k);
+  const tot = J.reduce((p, j) => p * (1 + R.meses[j].real / 100), 1) - 1, cdi = J.reduce((p, j) => p * (1 + R.meses[j].cdi / 100), 1) - 1;
+  const linhas = Object.entries(R.categorias).map(([c, v]) => {
+    let contrib = 0, ret = 1, nP = 0, sP = 0, nR = 0;
+    J.forEach((j) => { const cc = v.contrib[j] || 0, p = v.peso[j] || 0; contrib += cc; if (p > 0.05) { ret *= 1 + cc / p; nR++; } sP += p; nP++; });
+    return { categoria: c, peso: sP / Math.max(nP, 1), contrib, ret: nR ? (ret - 1) * 100 : null, pcdi: nR && cdi ? ((ret - 1) / cdi) * 100 : null };
+  }).filter((r) => Math.abs(r.peso) > 0.05 || Math.abs(r.contrib) > 0.005).sort((x, y) => y.contrib - x.contrib);
+  linhas.push({ _cls: "total", categoria: "Fundo (retorno da cota)", peso: 100, contrib: tot * 100, ret: tot * 100, pcdi: cdi ? (tot / cdi) * 100 : null });
+  const somaAt = {};
+  R.contrib.forEach(([ia, jm, v]) => { if (jm >= a && jm <= b) somaAt[ia] = (somaAt[ia] || 0) + v; });
+  const ativos = Object.entries(somaAt).map(([ia, v]) => ({ ...R.ativos[ia], contrib: v }));
+  const melhores = ativos.slice().sort((x, y) => y.contrib - x.contrib).slice(0, 10), piores = ativos.slice().sort((x, y) => x.contrib - y.contrib).slice(0, 5);
+  const hedge = J.reduce((s, j) => s + (R.meses[j].hedge || 0), 0);
+
+  $("#corpo").innerHTML = `<div class="kpis">${kpi("Retorno do fundo", pct(tot * 100), `${mesBR(ms[a])} a ${mesBR(ms[b])}`, cls(tot))}${kpi("CDI", pct(cdi * 100), "mesmo período")}
+      ${kpi("% do CDI", pct(cdi ? (tot / cdi) * 100 : null, 1), "")}${kpi("Excesso sobre o CDI", pp((tot - cdi) * 100), "", cls(tot - cdi))}${kpi("Derivativos", pp(hedge), "já alocado nos ativos protegidos", cls(hedge))}</div>` +
+    cartao("Retorno por categoria", "Contribuição em pontos percentuais do PL; retorno e % do CDI da própria categoria no período", tabela([
+      { t: "Categoria", k: "categoria", w: 1 }, { t: "Peso médio", k: "peso", n: 1, f: (v) => pct(v, 1) }, { t: "Contribuição", k: "contrib", n: 1, f: (v) => `<span class="${cls(v)}">${pp(v)}</span>` },
+      { t: "Retorno", k: "ret", n: 1, f: (v) => pct(v) }, { t: "% do CDI", k: "pcdi", n: 1, f: (v) => pct(v, 0) }], linhas) +
+      `<p class="nota">Estimado com as carteiras mensais da CVM: variação de preço das posições + carrego do caixa + derivativos (futuro de DAP → ativos IPCA+, DI1 → prefixados, dólar → ativos no exterior, estimados pelas curvas do Tesouro, PTAX e IPCA) + a diferença para o retorno real da cota (taxas, negociação, marcação fora do esperado) distribuída nas categorias pelo peso. Cada ativo rende CDI + seu spread, ou a variação real de preço quando ela é crível. A soma das categorias fecha com o retorno real da cota.</p>`) +
+    `<div class="grade g-tabela">${cartao("Ativos que mais contribuíram", `${mesBR(ms[a])} a ${mesBR(ms[b])}`, '<div id="t_mel"></div><h3 style="margin-top:14px">Piores</h3><div id="t_pio"></div>')}
+      ${cartao("Risco x retorno: todos os fundos", "Mesmo período · laranja = nossos · cinza = peers", '<div id="g_rr"></div>')}</div>`;
+  const cols = [{ t: "Ativo", k: "ativo", w: 1 }, { t: "Grupo econômico", k: "grupo", w: 1 }, { t: "Categoria", k: "categoria", w: 1 },
+    { t: "Contribuição", k: "contrib", n: 1, f: (v) => `<span class="${cls(v)}">${pp(v, 3)}</span>` }];
+  $("#t_mel").innerHTML = tabela(cols, melhores);
+  $("#t_pio").innerHTML = tabela(cols, piores);
+  riscoRetorno($("#g_rr"), ms[a] + "-01", ms[b] + "-31", f.id);
+}
+function riscoRetorno(el, de, ate, destaque) {
+  const [i0, i1] = indicesDatas(de, ate);
+  const pts = st.V.fundos.map((f) => ({ f, e: estatPeriodo(f, i0, i1) })).filter((x) => x.e);
+  const grupo = (arr, nome, cor, tam, linha) => ({ type: "scatter", mode: "markers+text", name: nome, x: arr.map((p) => p.e.vol), y: arr.map((p) => p.e.pcdi),
+    text: arr.map((p) => (p.f.nosso || p.f.id === destaque ? p.f.nome : "")), textposition: "top center", textfont: { size: 11, color: css("--text-1") },
+    customdata: arr.map((p) => [p.f.nome, p.e.ret]), marker: { size: tam, color: cor, line: linha, opacity: 0.9 },
+    hovertemplate: "%{customdata[0]}<br>retorno %{customdata[1]:.2f}% · %{y:.1f}% do CDI · vol %{x:.2f}%<extra></extra>" });
+  const peers = pts.filter((p) => !p.f.nosso && p.f.id !== destaque), nossos = pts.filter((p) => p.f.nosso && p.f.id !== destaque), sel = pts.filter((p) => p.f.id === destaque);
+  const dados = [grupo(peers, "Peers", "#9aa0a6", 10, { width: 0 }), grupo(nossos, "Nossos", "#eb6834", 10, { width: 0 })];
+  if (sel.length) dados.push(grupo(sel, "Selecionado", sel[0].f.nosso ? "#eb6834" : "#9aa0a6", 13, { width: 2.5, color: css("--text-1") }));
+  plota(el, dados, layout({ hovermode: "closest", legend: { orientation: "h", y: -0.2 }, xaxis: { title: "volatilidade anual (%)", gridcolor: css("--line"), zeroline: false },
+    yaxis: { title: "% do CDI", gridcolor: css("--line"), zeroline: false } }), 420);
+}
+
+// ------------------------------------------------------------------ CONSOLIDADO
+function consolidado(el) {
+  const V = st.V, C = st.cons, ult = V.datas[V.datas.length - 1];
+  if (!C.ate) C.ate = ult;
+  if (!C.de) { const d = new Date(ult + "T12:00"); d.setFullYear(d.getFullYear() - 1); C.de = d.toISOString().slice(0, 10); }
+  el.innerHTML = `<div class="cab"><div class="titulo-fundo"><h2>Consolidado</h2><p class="sub">Retorno de cada fundo no período · só fundos ativos do início ao fim do período</p></div>
+    <div class="controles"><label>De <input type="date" id="cde" value="${C.de}" min="${V.datas[0]}" max="${ult}"></label><label>até <input type="date" id="cate" value="${C.ate}" min="${V.datas[0]}" max="${ult}"></label>
+    ${[["12m", 12], ["24m", 24], ["No ano", "ano"], ["Tudo", "tudo"]].map(([t, n]) => `<button class="botao" data-q="${n}">${t}</button>`).join("")}</div></div>
+    <div class="cartao"><div class="controles" style="margin-bottom:8px"><span class="sub" style="margin:0">Fundos:</span>
+      <button class="botao" data-s="todos">Todos</button><button class="botao" data-s="nossos">Nossos</button><button class="botao" data-s="peers">Peers</button><button class="botao" data-s="nenhum">Limpar</button></div>
+      <div class="multi" id="multi"></div></div>
+    <div id="cc"></div>`;
+  $("#cde").onchange = (e) => { C.de = e.target.value; desenha(); };
+  $("#cate").onchange = (e) => { C.ate = e.target.value; desenha(); };
+  document.querySelectorAll("[data-q]").forEach((b) => (b.onclick = () => {
+    const d = new Date(ult + "T12:00"), q = b.dataset.q;
+    C.ate = ult;
+    C.de = q === "tudo" ? V.datas[0] : q === "ano" ? ult.slice(0, 4) + "-01-01" : (d.setMonth(d.getMonth() - +q), d.toISOString().slice(0, 10));
+    desenha();
+  }));
+  document.querySelectorAll("[data-s]").forEach((b) => (b.onclick = () => {
+    const s = b.dataset.s;
+    C.sel = new Set(V.fundos.filter((f) => s === "todos" || (s === "nossos" && f.nosso) || (s === "peers" && !f.nosso)).map((f) => f.id));
+    desenha();
+  }));
+  const multi = $("#multi");
+  const chips = V.fundos.filter((f) => C.sel.has(f.id));
+  multi.innerHTML = (chips.length > 24 ? `<span class="chip">${chips.filter((f) => f.nosso).length} nossos + ${chips.filter((f) => !f.nosso).length} peers selecionados</span>`
+    : chips.map((f) => `<span class="chip ${f.nosso ? "nosso" : ""}">${esc(f.nome)}<button data-x="${f.id}" aria-label="Remover">×</button></span>`).join(""));
+  multi.querySelectorAll("[data-x]").forEach((b) => (b.onclick = () => { C.sel.delete(b.dataset.x); desenha(); }));
+  multi.appendChild(campoBusca((x) => { C.sel.add(x.id); desenha(); }, "Adicionar fundo: digite..."));
+
+  const [i0, i1] = indicesDatas(C.de, C.ate);
+  const linhas = [], fora = [];
+  V.fundos.filter((f) => C.sel.has(f.id)).forEach((f) => { const e = estatPeriodo(f, i0, i1); (e ? linhas : fora).push({ f, ...(e || {}) }); });
+  const cdiP = (V.cdi[i1] / V.cdi[i0] - 1) * 100;
+  const ord = C.ord, sgn = C.asc ? 1 : -1;
+  linhas.sort((x, y) => sgn * ((x[ord] ?? -1e9) - (y[ord] ?? -1e9)));
+  $("#cc").innerHTML = cartao("Retorno acumulado", `${dataBR(V.datas[i0 + 1] || V.datas[i0])} a ${dataBR(V.datas[i1])} · CDI ${pct(cdiP)} · laranja = nossos · cinza = peers`, '<div id="g_cons"></div>') +
+    cartao("Ranking no período", fora.length ? `${fora.length} fundo(s) selecionado(s) fora por não existirem no período inteiro: ${fora.map((x) => esc(x.f.nome)).join(", ")}` : "Clique no título da coluna para ordenar",
+      tabela([{ t: "#", k: "_i" }, { t: "Fundo", k: "nome", w: 1, f: (v, r) => `${r.f.nosso ? '<span class="ponto" style="background:var(--nosso)"></span>' : '<span class="ponto" style="background:#9aa0a6"></span>'}${esc(r.f.nome)}` },
+        { t: "Retorno", k: "ret", n: 1, ord: "ret", f: (v) => `<span class="${cls(v)}">${pct(v)}</span>` }, { t: "% do CDI", k: "pcdi", n: 1, ord: "pcdi", f: (v) => pct(v, 1) },
+        { t: "Vol. anual", k: "vol", n: 1, ord: "vol", f: (v) => pct(v) }, { t: "Pior drawdown", k: "dd", n: 1, ord: "dd", f: (v) => pct(v) },
+        { t: "PL (R$ mm)", k: "pl", n: 1, ord: "pl", f: (v) => num(v, 0) }],
+        linhas.map((r, i) => ({ ...r, _i: i + 1, nome: r.f.nome, pl: r.f.pl, _cls: r.f.nosso ? "nosso" : "" }))));
+  document.querySelectorAll("th[data-ord]").forEach((th) => (th.onclick = () => { if (C.ord === th.dataset.ord) C.asc = !C.asc; else { C.ord = th.dataset.ord; C.asc = false; } desenha(); }));
+  const xs = V.datas.slice(i0, i1 + 1);
+  const serie = (f) => { const c = f.cota.slice(i0, i1 + 1); let b = c.find((v) => v != null); return c.map((v) => (v == null ? null : (v / b - 1) * 100)); };
+  const dados = linhas.filter((r) => !r.f.nosso).map((r) => ({ x: xs, y: serie(r.f), name: r.f.nome, mode: "lines", line: { color: "#9aa0a6", width: 1.2 }, opacity: 0.55, showlegend: false,
+    hovertemplate: `${esc(r.f.nome)}: %{y:.2f}%<extra></extra>` }));
+  linhas.filter((r) => r.f.nosso).forEach((r) => dados.push({ x: xs, y: serie(r.f), name: r.f.nome, mode: "lines", line: { color: r.f.cor, width: 2.8 }, hovertemplate: `${esc(r.f.nome)}: %{y:.2f}%<extra></extra>` }));
+  const c0 = V.cdi[i0];
+  dados.push({ x: xs, y: V.cdi.slice(i0, i1 + 1).map((v) => (v / c0 - 1) * 100), name: "CDI", mode: "lines", line: { color: css("--text-1"), width: 2, dash: "dash" }, hovertemplate: "CDI: %{y:.2f}%<extra></extra>" });
+  plota($("#g_cons"), dados, layout({ hovermode: "closest", yaxis: { ticksuffix: "%", gridcolor: css("--line") } }), 460);
+}
 
 </script>
 </body>
@@ -1510,7 +1562,7 @@ $("#btn-processar").onclick = async (e) => {
 
 
 def gera_excel():
-    CNPJ = {n: cnpj_of(x) for n, x in PEERS.items()}
+    CNPJ = {n: cnpj_of(x) for n, x in {**NOSSOS_FUNDOS, **PEERS}.items()}
     meses, dia = prepara(sorted(CNPJ.values()), DESDE)
     print(f"{len(meses)} meses de carteira ({meses[0]} a {meses[-1]})")
     df = lookthrough(CNPJ, meses)
@@ -1523,7 +1575,7 @@ def gera_excel():
     cruz = df[df.cnpj_veiculo.isin(CNPJ.values()) & (df.cnpj_veiculo != df.fundo.map(CNPJ))]
     print("peers investindo em outro peer:", "nenhum" if cruz.empty else sorted(set(zip(cruz.fundo, cruz.veiculo))))
     rent = rentabilidade(diario(CNPJ, dia), cdi_mensal(DESDE))
-    excel(df, rent, list(PEERS), OUT)
+    excel(df, rent, list(CNPJ), OUT)
     print("salvo", OUT, "e", OUT.replace(".xlsx", "_dados.csv"), len(df), "linhas")
 
 
@@ -1533,9 +1585,7 @@ if __name__ == "__main__":                 # importante: os processos auxiliares
     else:
         import webbrowser
         import uvicorn
-        CAD["iniciado"] = True
-        threading.Thread(target=carrega_cadastro, daemon=True).start()
-        print(f"Preparando o painel: {len(PEERS)} fundos desde {DESDE_PAINEL}. Na 1a vez pode levar alguns minutos...")
+        print(f"Preparando o painel: {len(NOSSOS_FUNDOS) + len(PEERS)} fundos desde {DESDE}. Na 1a vez pode levar bastante tempo...")
         precarrega(log=lambda m: print("  " + m, flush=True))
         if PRE["status"] != "ok":
             sys.exit("Nao foi possivel preparar o painel: " + str(PRE["erro"]))

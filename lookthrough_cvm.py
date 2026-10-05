@@ -1,39 +1,60 @@
 """
-Look-through de carteiras com dados abertos da CVM (dados.cvm.gov.br) - oficial, gratuito, sem bloqueio.
-  CDA (carteira mensal de todos os fundos)  -> abre cotas de fundo recursivamente, % = produto ao longo da cadeia
-  INF_DIARIO (cota diaria)                  -> rentabilidade, PL, captacao, cotistas (CDI: Banco Central, SGS 12)
+Dados abertos de fundos: CVM (carteira CDA mensal, informe diario), ANBIMA (debentures), Tesouro Direto (curvas),
+Banco Central (CDI, PTAX) e IBGE (IPCA). Tudo publico e gratuito.
+  CDA -> look-through: abre cotas de fundo recursivamente, % = produto dos pesos ao longo da cadeia
+Os dados baixados ficam na pasta "dados_painel", ao lado deste arquivo.
 Uso direto (gera Excel):  python lookthrough_cvm.py
-Usado tambem pelo painel:  streamlit run app.py
-Saida do Excel (lookthrough_cvm.xlsx): graficos, evolucao, rentabilidade, top10, uma aba por peer
-  + lookthrough_cvm_dados.csv (tabela plana, uma linha por caminho ate o ativo)
-Cache local: zips da CVM + recortes em parquet so dos fundos necessarios.
 """
 import io
 import json
 import os
 import re
-import tempfile
 import time
 import zipfile
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from datetime import date
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import requests
 
-PEERS = {                       # nome: CNPJ (qualquer formato) ou link do Mais Retorno
+# ------------------------------------------------------------------ CONFIGURACAO (edite aqui)
+NOSSOS_FUNDOS = {               # nome curto: CNPJ (qualquer formato)
     "DUAL": "34.803.938/0001-61",
+}
+PEERS = {
     "AZ_ALTRO": "22.100.009/0001-07",
     "SPARTA_TOP": "14.188.162/0001-00",
     "XP_CE120": "22.003.930/0001-31",
     "CAPITANIA_P45": "20.146.294/0001-71",
+    "KINEA_CP_PREV": "26.491.419/0001-87",
+    "IBIUNA_CREDIT": "37.310.657/0001-65",
+    "DAYCOVAL_CLASSIC": "10.783.480/0001-68",
+    "BRADESCO_BONUS": "20.216.829/0001-33",
+    "RIZA_LOTUS_PREV": "43.423.186/0001-02",
 }
-DESDE = "2019-01"               # primeiro mes (CDA existe desde 2005; quanto mais antigo, mais download na 1a vez)
+DESDE = "2019-01"               # primeiro mes de carteira/cota (CDA existe desde 2005; mais antigo = mais download na 1a vez)
+# grupo economico: a CVM so informa o emissor. Regra = trecho do nome do emissor (sem acento, maiusculo) -> grupo.
+# Securitizadoras (Opea, Vert, True...) ficam como estao: o devedor do lastro nao vem na CDA.
+GRUPOS = {
+    "LOCALIZA|UNIDAS": "Localiza", "REDE D.?OR|DOR SAO LUIZ": "Rede D'Or", "AEGEA|AGUAS DO RIO|AGUAS DO PARA|EQUIPAV|CORSAN|RIOGRANDENSE DE SANEAMENTO": "Aegea",
+    "BRK AMBIENTAL": "BRK", "EQUATORIAL|CEEE": "Equatorial", "ENERGISA": "Energisa", "CEMIG": "Cemig", "COPEL": "Copel",
+    "SABESP|SANEAMENTO BASICO DO ESTADO DE SAO PAULO": "Sabesp", "COPASA|SANEAMENTO DE MINAS": "Copasa", "PETROBRAS|PETROLEO BRASILEIRO": "Petrobras",
+    "PRIO|PETRO RIO": "Prio", "PETRORECONCAVO": "PetroReconcavo", "COSAN|RAIZEN|RUMO|COMPASS|MOOVE": "Cosan", "VALE S": "Vale",
+    "SUZANO": "Suzano", "KLABIN": "Klabin", "SENDAS|ASSAI": "Assaí", "HAPVIDA|NOTRE DAME": "Hapvida", "VAMOS|SIMPAR|JSL|MOVIDA|CS INFRA": "Simpar",
+    "MILLS": "Mills", "EUROFARMA": "Eurofarma", "IOCHPE": "Iochpe-Maxion", "CCR|MOTIVA": "Motiva (CCR)", "ECORODOVIAS": "EcoRodovias",
+    "ELETROBRAS|CENTRAIS ELETRICAS BRASILEIRAS|FURNAS|CHESF|ELETRONORTE": "Eletrobras", "TAESA|TRANSMISSORA ALIANCA": "Taesa",
+    "ISA ENERGIA|CTEEP": "ISA Energia", "AUREN|CESP|AES BRASIL": "Auren", "NOVA TRANSPORTADORA DO SUDESTE": "NTS", "VLI ": "VLI",
+    "ITAU": "Itaú", "BRADESCO": "Bradesco", "SANTANDER": "Santander", "BANCO DO BRASIL": "Banco do Brasil", "CAIXA ECONOMICA": "Caixa",
+    "BTG": "BTG Pactual", "VOTORANTIM|BANCO BV": "BV", "XP ": "XP", "SAFRA": "Safra", "DAYCOVAL": "Daycoval",
+    "TESOURO NACIONAL|SECRETARIA DO TESOURO": "Tesouro Nacional",
+}
 OUT = "lookthrough_cvm.xlsx"
 WORKERS = 4
 
 URL = "https://dados.cvm.gov.br/dados/FI/DOC"
-CACHE = Path(os.environ.get("CVM_CACHE") or Path(os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()) / "cvm_cache")
+CACHE = Path(os.environ.get("PAINEL_DADOS") or Path(__file__).resolve().parent / "dados_painel")   # pasta ao lado do .py
 (CACHE / "rec").mkdir(parents=True, exist_ok=True)
 VERSAO = 2                      # muda quando o recorte guarda colunas novas (forca reprocessar)
 REN = {"CNPJ_FUNDO": "CNPJ_FUNDO_CLASSE", "CNPJ_FUNDO_COTA": "CNPJ_FUNDO_CLASSE_COTA",
@@ -183,19 +204,38 @@ def precisa(kind, m, peers):     # recorte em cache cobre os fundos pedidos?
     return not fecho(pd.read_parquet(CACHE / "rec" / f"links_{m}.parquet"), peers) <= tem
 
 
+def _modificado(u):
+    try:
+        return u, pd.Timestamp(requests.head(u, timeout=60).headers["Last-Modified"]).timestamp()
+    except (requests.RequestException, KeyError, ValueError):
+        return u, None
+
+
+def atualiza_publicacoes(cda, dia, log=print):
+    """A CVM republica o arquivo do mes conforme os fundos entregam ou abrem a carteira (ha meses de prazo).
+    Uma vez por dia confere a data de TODOS os arquivos mensais e rebaixa os que mudaram."""
+    marca_dia = CACHE / f"verificado_{date.today()}.txt"
+    if marca_dia.exists():
+        return
+    urls = [u for u in list(cda) + list(dia) if "HIST" not in u and (CACHE / u.rsplit("/", 1)[1]).exists()]
+    with ThreadPoolExecutor(8) as ex:
+        mudou = [u for u, t in ex.map(_modificado, urls) if t and t > (CACHE / u.rsplit("/", 1)[1]).stat().st_mtime]
+    for u in mudou:
+        (CACHE / u.rsplit("/", 1)[1]).unlink(missing_ok=True)
+        for m in (cda.get(u) or dia.get(u)):
+            for j in CACHE.glob(f"rec/*_{m}.json"):
+                j.unlink(missing_ok=True)
+    if mudou:
+        log(f"{len(mudou)} arquivo(s) da CVM republicado(s) desde a ultima carga: baixando de novo")
+    for velho in CACHE.glob("verificado_*.txt"):
+        velho.unlink(missing_ok=True)
+    marca_dia.write_text(f"{len(urls)} arquivos conferidos, {len(mudou)} atualizados")
+
+
 def prepara(cnpjs, desde, workers=WORKERS, log=print):
     """Baixa/recorta da CVM so o que falta. Devolve (meses de carteira, {arquivo diario: meses})."""
     cda, dia = arquivos("CDA", desde), arquivos("INF_DIARIO", desde)
-    for u in [u for u in cda if "HIST" not in u][-3:] + [u for u in dia if "HIST" not in u][-2:]:
-        loc = CACHE / u.rsplit("/", 1)[1]           # meses recentes: a CVM republica conforme os fundos entregam
-        try:
-            if loc.exists() and pd.Timestamp(requests.head(u, timeout=60).headers["Last-Modified"]).timestamp() > loc.stat().st_mtime:
-                loc.unlink()
-                for m in (cda.get(u) or dia.get(u)):
-                    for j in CACHE.glob(f"rec/*_{m}.json"):
-                        j.unlink()
-        except (requests.RequestException, KeyError, OSError):
-            pass
+    atualiza_publicacoes(cda, dia, log)
     tarefas = ([(processa_cda, u, ms) for u, ms in cda.items() if any(precisa("cda", m, cnpjs) for m in ms)]
                + [(processa_diario, u, ms) for u, ms in dia.items() if any(precisa("diario", m, cnpjs) for m in ms)])
 
@@ -222,8 +262,8 @@ def fund_cat(name):
             else "Cotas de Fundos")
 
 
-def lookthrough(nomes, meses):
-    """nomes: {nome: cnpj}. Uma linha por ativo final x caminho, com % do PL do peer e movimentacao do mes."""
+def carrega_pos(meses):
+    """Posicoes (so dos fundos recortados) + PL de todos, todos os meses, com a linha de ajuste carteira x PL."""
     pos = pd.concat([pd.read_parquet(CACHE / "rec" / f"cda_{m}.parquet").assign(mes=m) for m in meses], ignore_index=True)
     pl = pd.concat([pd.read_parquet(CACHE / "rec" / f"pl_{m}.parquet").assign(mes=m) for m in meses], ignore_index=True)
     pl = pl.drop_duplicates(["mes", "CNPJ_FUNDO_CLASSE"]).set_index(["mes", "CNPJ_FUNDO_CLASSE"]).VL_PATRIM_LIQ.astype(float)
@@ -236,6 +276,12 @@ def lookthrough(nomes, meses):
     aj = aj[(aj.v.abs() > 0.005 * aj.pl_fundo.abs())].reset_index().assign(
         TP_APLIC=AJUSTE, ativo="Diferença entre PL informado e soma da carteira (fonte CVM)")
     pos = pd.concat([pos, aj.drop(columns="soma")], ignore_index=True)
+    return pos, pl
+
+
+def lookthrough(nomes, meses, carga=None):
+    """nomes: {nome: cnpj}. Uma linha por ativo final x caminho, com % do PL do fundo e movimentacao do mes."""
+    pos, pl = carga or carrega_pos(meses)
     tem_cart = set(zip(pos.mes, pos.CNPJ_FUNDO_CLASSE))
     front = pd.DataFrame([dict(fundo=n, mes=m, veic=c, peso=1.0, caminho=n, cadeia=c)
                           for n, c in nomes.items() for m in meses if (m, c) in tem_cart])
@@ -342,20 +388,106 @@ def anbima_debentures():
     return hist[hist.data == hist.data.max()], hist
 
 
-def cdi_mensal(desde, diario=False):
-    cdi, hoje = [], pd.Timestamp.today()
-    for a in range(int(desde[:4]), hoje.year + 1, 9):         # API do BC: no maximo 10 anos por consulta
+def sgs(codigo, desde):
+    """Serie do Banco Central (SGS). Diarias: no maximo 10 anos por consulta."""
+    out, hoje = [], pd.Timestamp.today()
+    for a in range(int(desde[:4]), hoje.year + 1, 9):
         fim = min(pd.Timestamp(a + 8, 12, 31), hoje).strftime("%d/%m/%Y")
         for tent in range(5):
             try:
-                cdi += requests.get("https://api.bcb.gov.br/dados/serie/bcdata.sgs.12/dados", timeout=60,
+                out += requests.get(f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.{codigo}/dados", timeout=60,
                                     params={"formato": "json", "dataInicial": f"01/01/{a}", "dataFinal": fim}).json()
                 break
             except (requests.RequestException, ValueError):
                 time.sleep(5 * (tent + 1))
-    cdi = pd.DataFrame(cdi)
-    s = pd.Series(cdi.valor.astype(float).values / 100, index=pd.to_datetime(cdi.data, dayfirst=True))
+    d = pd.DataFrame(out)
+    return pd.Series(d.valor.astype(float).values, index=pd.to_datetime(d.data, dayfirst=True)).sort_index() if len(d) else pd.Series(dtype=float)
+
+
+def cdi_mensal(desde, diario=False):
+    s = sgs(12, desde) / 100
     return s if diario else (1 + s).groupby(s.index.strftime("%Y-%m")).prod() - 1
+
+
+def ipca_indice():
+    """Numero-indice do IPCA (IBGE/SIDRA), mensal. Usado no valor do contrato futuro DAP."""
+    f = CACHE / "ipca_indice.json"
+    if not f.exists() or f.stat().st_mtime < time.time() - 86400:
+        try:
+            r = requests.get("https://apisidra.ibge.gov.br/values/t/1737/n1/all/v/2266/p/all", timeout=120).json()
+            f.write_text(json.dumps({x["D3C"]: x["V"] for x in r[1:]}))
+        except (requests.RequestException, ValueError, KeyError):
+            if not f.exists():
+                return pd.Series(dtype=float)
+    d = json.loads(f.read_text())
+    s = pd.Series({f"{k[:4]}-{k[4:]}": float(v) for k, v in d.items() if v not in ("...", "-", "")})
+    return s.sort_index()
+
+
+def tesouro():
+    """Curvas do Tesouro Direto (gratuito, diario desde 2004): prefixado (LTN) e IPCA+ (NTN-B principal), taxa x prazo."""
+    f = CACHE / "tesouro_direto.csv"
+    if not f.exists() or f.stat().st_mtime < time.time() - 86400:
+        try:
+            r = requests.get("https://www.tesourotransparente.gov.br/ckan/dataset/df56aa42-484a-4a59-8184-7676580c81e3/"
+                             "resource/796d2059-14e9-44e3-80c9-2d9e30b405c1/download/PrecoTaxaTesouroDireto.csv", timeout=300)
+            r.raise_for_status()
+            f.write_bytes(r.content)
+        except requests.RequestException:
+            if not f.exists():
+                return {}
+    d = pd.read_csv(f, sep=";", decimal=",")
+    d = d[d["Tipo Titulo"].isin(["Tesouro Prefixado", "Tesouro IPCA+"])].copy()
+    d["data"] = pd.to_datetime(d["Data Base"], dayfirst=True)
+    d["anos"] = (pd.to_datetime(d["Data Vencimento"], dayfirst=True) - d.data).dt.days / 365.25
+    d["taxa"] = d[["Taxa Compra Manha", "Taxa Venda Manha"]].replace(0, np.nan).mean(axis=1)
+    d["tipo"] = np.where(d["Tipo Titulo"].eq("Tesouro Prefixado"), "PRE", "IPCA")
+    d = d.dropna(subset=["taxa"]).sort_values(["tipo", "data", "anos"])
+    out = {}
+    for t, g in d.groupby("tipo"):
+        por_dia = {k: (x.anos.values, x.taxa.values) for k, x in g.groupby("data")}
+        datas = sorted(por_dia)
+        out[t] = (np.array(datas, dtype="datetime64[ns]"), datas, por_dia)
+    return out
+
+
+def curva(curvas, tipo, dia, anos):
+    """Taxa (% a.a.) da curva `tipo` ("PRE" ou "IPCA") no ultimo dia util <= `dia`, interpolada no prazo `anos`."""
+    if tipo not in curvas:
+        return np.full(np.shape(anos), np.nan)
+    arr, datas, por_dia = curvas[tipo]
+    i = np.searchsorted(arr, np.datetime64(pd.Timestamp(dia)), side="right") - 1
+    if i < 0:
+        return np.full(np.shape(anos), np.nan)
+    x, y = por_dia[datas[i]]
+    return np.interp(np.clip(anos, x.min(), x.max()), x, y)
+
+
+def _sem_acento(t):
+    import unicodedata
+    return unicodedata.normalize("NFKD", str(t)).encode("ascii", "ignore").decode().upper()
+
+
+_GRUPOS_RE = [(re.compile(k), v) for k, v in GRUPOS.items()]
+_SUFIXOS = re.compile(r"(?<![\w.])(S\.A\.?|S/A|SA|LTDA|SPE|PARTICIPACOES|HOLDING|COMPANHIA|CIA|EMPREENDIMENTOS|E|DE|DO|DA|DOS|DAS|EM)(?![\w/])")
+
+
+def grupo(emissor, categoria=""):
+    """Grupo economico pelo nome do emissor (mapa GRUPOS); sem mapa, o proprio emissor sem sufixos."""
+    if categoria in ("Operações Compromissadas",):
+        return "Compromissadas"
+    if categoria == "Títulos Públicos":
+        return "Tesouro Nacional"
+    if categoria in ("Disponibilidades", "Valores a receber", "Valores a pagar", AJUSTE):
+        return "Caixa e outros"
+    if not isinstance(emissor, str) or not emissor.strip():
+        return None
+    n = _sem_acento(emissor)
+    for rx, g in _GRUPOS_RE:
+        if rx.search(n):
+            return g
+    base = " ".join(w for w in _SUFIXOS.sub(" ", n).split() if not w.isdigit())
+    return base.title()[:40] or emissor
 
 
 def diario(nomes, dia):
@@ -485,7 +617,7 @@ def excel(df, rent, ordem, out):
 
 
 if __name__ == "__main__":
-    CNPJ = {n: cnpj_of(x) for n, x in PEERS.items()}
+    CNPJ = {n: cnpj_of(x) for n, x in {**NOSSOS_FUNDOS, **PEERS}.items()}
     meses, dia = prepara(sorted(CNPJ.values()), DESDE)
     print(f"{len(meses)} meses de carteira ({meses[0]} a {meses[-1]})")
     df = lookthrough(CNPJ, meses)
@@ -498,5 +630,5 @@ if __name__ == "__main__":
     cruz = df[df.cnpj_veiculo.isin(CNPJ.values()) & (df.cnpj_veiculo != df.fundo.map(CNPJ))]
     print("peers investindo em outro peer:", "nenhum" if cruz.empty else sorted(set(zip(cruz.fundo, cruz.veiculo))))
     rent = rentabilidade(diario(CNPJ, dia), cdi_mensal(DESDE))
-    excel(df, rent, list(PEERS), OUT)
+    excel(df, rent, list(CNPJ), OUT)
     print("salvo", OUT, "e", OUT.replace(".xlsx", "_dados.csv"), len(df), "linhas")

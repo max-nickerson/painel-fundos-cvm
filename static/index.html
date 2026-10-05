@@ -12,46 +12,26 @@
 <header class="barra">
   <div class="marca">
     <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect x="4" y="16" width="5" height="12" rx="1.5" fill="#2a78d6"/><rect x="13.5" y="9" width="5" height="19" rx="1.5" fill="#1baf7a"/><rect x="23" y="4" width="5" height="24" rx="1.5" fill="#eb6834"/></svg>
-    <div><h1>Painel de fundos</h1><p id="datas" class="datas">Carregando dados...</p></div>
+    <div><h1>Painel de fundos</h1><p id="datas" class="datas"></p></div>
   </div>
-  <div class="acoes">
-    <button id="btn-add" class="botao">+ Fundo</button>
-    <button id="tema" class="botao icone" title="Tema claro/escuro" aria-label="Alternar tema">◐</button>
-  </div>
+  <nav class="abas" role="tablist">
+    <button role="tab" data-aba="carteira" aria-selected="true">Carteira</button>
+    <button role="tab" data-aba="retorno" aria-selected="false">Retorno</button>
+    <button role="tab" data-aba="consolidado" aria-selected="false">Consolidado</button>
+  </nav>
+  <button id="tema" class="botao icone" title="Tema claro/escuro" aria-label="Alternar tema">◐</button>
 </header>
-
-<div class="layout">
-  <nav id="menu" class="menu" aria-label="Seções"></nav>
-  <main>
-    <div class="topo-secao">
-      <div><h2 id="titulo"></h2><p id="descricao" class="descricao"></p></div>
-      <div id="foco" class="foco"></div>
-    </div>
-    <div id="legenda" class="legenda-fundos"></div>
-    <section id="conteudo"></section>
-  </main>
-</div>
+<main id="conteudo"></main>
 
 <div id="carregando" class="carregando">
   <div class="caixa">
     <svg class="logo grande" viewBox="0 0 32 32" aria-hidden="true"><rect x="4" y="16" width="5" height="12" rx="1.5" fill="#2a78d6"/><rect x="13.5" y="9" width="5" height="19" rx="1.5" fill="#1baf7a"/><rect x="23" y="4" width="5" height="24" rx="1.5" fill="#eb6834"/></svg>
     <h2>Preparando o painel</h2>
-    <p class="descricao">Baixando e processando os dados de todos os fundos (CVM, ANBIMA e Banco Central). Na primeira vez do dia pode levar alguns minutos.</p>
+    <p class="descricao">Baixando e processando os dados de todos os fundos. Na primeira vez do dia pode levar alguns minutos.</p>
     <div class="barra-prog"><div></div></div>
     <pre id="log-carga"></pre>
   </div>
 </div>
-
-<dialog id="dlg-add">
-  <form method="dialog" class="dlg">
-    <h2>Adicionar fundos</h2>
-    <p class="descricao">Busque por nome ou CNPJ. Os fundos escolhidos são processados junto com os atuais.</p>
-    <div class="busca-wrap"><input id="busca" type="search" placeholder="ex.: Kinea, Ibiuna, 37.310.657/0001-65" autocomplete="off"><ul id="sugestoes" class="sugestoes" hidden></ul></div>
-    <ul id="novos" class="novos"></ul>
-    <div class="dlg-acoes"><button value="cancelar" class="botao">Cancelar</button><button id="btn-processar" value="ok" class="botao primario">Processar</button></div>
-    <pre id="log-add" hidden></pre>
-  </form>
-</dialog>
 <script src="/static/app.js"></script>
 </body>
 </html>
