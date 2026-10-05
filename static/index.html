@@ -9,32 +9,49 @@
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
 </head>
 <body>
-<header class="topo">
-  <div>
-    <h1>Painel de fundos</h1>
-    <p class="sub">Dados abertos: CVM (carteira mensal e informe diário), ANBIMA (debêntures) e Banco Central (CDI)</p>
+<header class="barra">
+  <div class="marca">
+    <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect x="4" y="16" width="5" height="12" rx="1.5" fill="#2a78d6"/><rect x="13.5" y="9" width="5" height="19" rx="1.5" fill="#1baf7a"/><rect x="23" y="4" width="5" height="24" rx="1.5" fill="#eb6834"/></svg>
+    <div><h1>Painel de fundos</h1><p id="datas" class="datas">Carregando dados...</p></div>
   </div>
-  <button id="tema" class="icone" title="Alternar tema claro/escuro" aria-label="Alternar tema">◐</button>
+  <div class="acoes">
+    <button id="btn-add" class="botao">+ Fundo</button>
+    <button id="tema" class="botao icone" title="Tema claro/escuro" aria-label="Alternar tema">◐</button>
+  </div>
 </header>
+
 <div class="layout">
-  <aside class="painel">
-    <label for="busca" class="rot">Adicionar fundo (nome ou CNPJ)</label>
-    <div class="busca-wrap">
-      <input id="busca" type="search" placeholder="ex.: Kinea, Sparta, 34.803.938/0001-61" autocomplete="off">
-      <ul id="sugestoes" class="sugestoes" hidden></ul>
-    </div>
-    <ul id="escolhidos" class="escolhidos"></ul>
-    <label for="desde" class="rot">Carteiras desde</label>
-    <select id="desde"></select>
-    <button id="carregar" class="primario">Carregar</button>
-    <div id="progresso" class="progresso" hidden></div>
-    <p class="nota">A primeira carga de um fundo ou período baixa os arquivos da CVM e pode levar alguns minutos; depois fica em cache.</p>
-  </aside>
+  <nav id="menu" class="menu" aria-label="Seções"></nav>
   <main>
-    <nav id="abas" class="abas" role="tablist"></nav>
-    <section id="conteudo" class="conteudo"><div class="vazio">Escolha os fundos e clique em <b>Carregar</b>.</div></section>
+    <div class="topo-secao">
+      <div><h2 id="titulo"></h2><p id="descricao" class="descricao"></p></div>
+      <div id="foco" class="foco"></div>
+    </div>
+    <div id="legenda" class="legenda-fundos"></div>
+    <section id="conteudo"></section>
   </main>
 </div>
+
+<div id="carregando" class="carregando">
+  <div class="caixa">
+    <svg class="logo grande" viewBox="0 0 32 32" aria-hidden="true"><rect x="4" y="16" width="5" height="12" rx="1.5" fill="#2a78d6"/><rect x="13.5" y="9" width="5" height="19" rx="1.5" fill="#1baf7a"/><rect x="23" y="4" width="5" height="24" rx="1.5" fill="#eb6834"/></svg>
+    <h2>Preparando o painel</h2>
+    <p class="descricao">Baixando e processando os dados de todos os fundos (CVM, ANBIMA e Banco Central). Na primeira vez do dia pode levar alguns minutos.</p>
+    <div class="barra-prog"><div></div></div>
+    <pre id="log-carga"></pre>
+  </div>
+</div>
+
+<dialog id="dlg-add">
+  <form method="dialog" class="dlg">
+    <h2>Adicionar fundos</h2>
+    <p class="descricao">Busque por nome ou CNPJ. Os fundos escolhidos são processados junto com os atuais.</p>
+    <div class="busca-wrap"><input id="busca" type="search" placeholder="ex.: Kinea, Ibiuna, 37.310.657/0001-65" autocomplete="off"><ul id="sugestoes" class="sugestoes" hidden></ul></div>
+    <ul id="novos" class="novos"></ul>
+    <div class="dlg-acoes"><button value="cancelar" class="botao">Cancelar</button><button id="btn-processar" value="ok" class="botao primario">Processar</button></div>
+    <pre id="log-add" hidden></pre>
+  </form>
+</dialog>
 <script src="/static/app.js"></script>
 </body>
 </html>

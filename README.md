@@ -26,7 +26,7 @@ Abas: Visão geral · Rentabilidade · PL & captação · Alocação · Crédito
 ## Jeito mais simples: um arquivo só (copiar e colar)
 1. Instale o Python 3.11+ (python.org; no Windows marque *Add python.exe to PATH*).
 2. `pip install fastapi uvicorn pandas numpy requests pyarrow openpyxl`
-3. Copie o conteúdo de [`painel.py`](painel.py) para um arquivo `painel.py` e rode `python painel.py` (abre o navegador sozinho). `python painel.py excel` gera o Excel.
+3. Copie o conteúdo de [`painel.py`](painel.py) para um arquivo `painel.py` e rode `python painel.py`. Ele **baixa e processa todos os peers** (lista `PEERS` no topo do arquivo, desde `DESDE`) e só então abre o painel no navegador, com tudo pronto. A 1ª vez num computador leva alguns minutos; depois o painel do dia fica salvo e abre em segundos. `python painel.py excel` gera o Excel.
 
 ## Rodar no seu computador (versão em pastas)
 ```bash

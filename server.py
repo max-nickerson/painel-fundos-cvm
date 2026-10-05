@@ -6,6 +6,7 @@ Cada carga roda em segundo plano (a 1a vez de um fundo/periodo baixa arquivos da
 """
 import hashlib
 import io
+import json
 import math
 import os
 import threading
@@ -13,6 +14,7 @@ import unicodedata
 import uuid
 import zipfile
 from collections import OrderedDict
+from datetime import date
 
 import numpy as np
 import pandas as pd
@@ -59,7 +61,6 @@ def carrega_cadastro():
         CAD["erro"] = f"{type(e).__name__}: {e}"
 
 
-threading.Thread(target=carrega_cadastro, daemon=True).start()
 
 
 @app.get("/api/busca")
@@ -138,6 +139,9 @@ def monta(fundos, desde, log):
     cdi_m = (1 + cdi).groupby(cdi.index.strftime("%Y-%m")).prod() - 1
     an_u, an_h = lt.anbima_debentures()
     out = {"meta": {"desde": desde, "fundos": [{"nome": n, "cnpj": c, "cor": CORES[i % 8]} for i, (n, c) in enumerate(fundos)],
+                    "gerado": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"),
+                    "ult_carteira": max(meses) if meses else None,
+                    "ult_cota": d.data.max().strftime("%Y-%m-%d") if len(d) else None,
                     "anbima_data": an_u.data.iloc[0].strftime("%Y-%m-%d") if len(an_u) else None,
                     "anbima_dias": int(an_h.data.nunique()) if len(an_h) else 0}}
 
@@ -304,10 +308,57 @@ def _roda(job, fundos, desde):
         with LOCK:
             RESULTADOS[_chave(fundos, desde)] = res
             while len(RESULTADOS) > 12:
-                RESULTADOS.popitem(last=False)
+                velho = next(k for k in RESULTADOS if k != PRE.get("chave"))
+                RESULTADOS.pop(velho)
         JOBS[job]["status"] = "ok"
     except Exception as e:
         JOBS[job] |= {"status": "erro", "erro": f"{type(e).__name__}: {e}"}
+
+
+# ------------------------------------------------------------------ pre-carga: todos os peers antes de abrir o painel
+DESDE_PAINEL = os.environ.get("PAINEL_DESDE", lt.DESDE)
+PRE = {"status": "parado", "log": [], "chave": None, "erro": None}
+
+
+def precarrega(log=None):
+    """Baixa/processa todos os peers (PEERS, desde DESDE_PAINEL). Resultado do dia fica salvo em disco: reinicio rapido."""
+    escreve = log or PRE["log"].append
+    PRE["status"] = "rodando"
+    try:
+        fundos = [(n, lt.cnpj_of(x)) for n, x in lt.PEERS.items()]
+        k = _chave(fundos, DESDE_PAINEL)
+        f = lt.CACHE / f"painel_{k}_{date.today()}.json"
+        if f.exists():
+            escreve("Usando o painel já processado hoje (cache).")
+            res = json.loads(f.read_text(encoding="utf-8"))
+        else:
+            escreve(f"Baixando e processando {len(fundos)} fundos desde {DESDE_PAINEL} (1a vez no dia pode levar minutos)...")
+            res = monta(fundos, DESDE_PAINEL, escreve)
+            for velho in lt.CACHE.glob(f"painel_{k}_*.json"):
+                velho.unlink(missing_ok=True)
+            f.write_text(json.dumps(res), encoding="utf-8")
+        with LOCK:
+            RESULTADOS[k] = res
+        PRE.update(status="ok", chave=k)
+    except Exception as e:
+        PRE.update(status="erro", erro=f"{type(e).__name__}: {e}")
+        escreve("ERRO: " + PRE["erro"])
+
+
+def _inicio():                              # servidor (pasta/Docker): cadastro e pre-carga em segundo plano
+    if not CAD.get("iniciado"):
+        CAD["iniciado"] = True
+        threading.Thread(target=carrega_cadastro, daemon=True).start()
+    if PRE["status"] == "parado":
+        threading.Thread(target=precarrega, daemon=True).start()
+
+
+app.add_event_handler("startup", _inicio)
+
+
+@app.get("/api/inicial")
+def inicial():
+    return {"status": PRE["status"], "chave": PRE["chave"], "log": PRE["log"][-8:], "erro": PRE["erro"]}
 
 
 @app.post("/api/carregar")
@@ -349,7 +400,12 @@ def resultado(chave: str):
 @app.get("/api/csv/{chave}/{tipo}")
 def csv(chave: str, tipo: str):
     if chave not in RESULTADOS_DF:
-        raise HTTPException(404)
+        if chave not in RESULTADOS:
+            raise HTTPException(404)
+        m = RESULTADOS[chave]["meta"]
+        fundos = [(f["nome"], f["cnpj"]) for f in m["fundos"]]
+        meses, dia = lt.prepara(sorted(c for _, c in fundos), m["desde"], workers=1, log=lambda *_: None)
+        RESULTADOS_DF[chave] = (lt.lookthrough(dict(fundos), meses), lt.diario(dict(fundos), dia))
     df, d = RESULTADOS_DF[chave]
     x = df.drop(columns=["chave", "fator"], errors="ignore") if tipo == "carteira" else d
     return Response(x.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig"), media_type="text/csv",
