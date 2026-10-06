@@ -680,7 +680,8 @@ def tesouro():
     d["anos"] = (pd.to_datetime(d["Data Vencimento"], dayfirst=True) - d.data).dt.days / 365.25
     d["taxa"] = d[["Taxa Compra Manha", "Taxa Venda Manha"]].replace(0, np.nan).mean(axis=1)
     d["tipo"] = np.where(d["Tipo Titulo"].eq("Tesouro Prefixado"), "PRE", "IPCA")
-    d = d.dropna(subset=["taxa"]).sort_values(["tipo", "data", "anos"])
+    d = d.dropna(subset=["taxa"])
+    d = d[d.anos >= 0.5].sort_values(["tipo", "data", "anos"])      # titulo vencendo em meses distorce a taxa (projecao do IPCA)
     out = {}
     for t, g in d.groupby("tipo"):
         por_dia = {k: (x.anos.values, x.taxa.values) for k, x in g.groupby("data")}

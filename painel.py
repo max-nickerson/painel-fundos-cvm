@@ -690,7 +690,8 @@ def tesouro():
     d["anos"] = (pd.to_datetime(d["Data Vencimento"], dayfirst=True) - d.data).dt.days / 365.25
     d["taxa"] = d[["Taxa Compra Manha", "Taxa Venda Manha"]].replace(0, np.nan).mean(axis=1)
     d["tipo"] = np.where(d["Tipo Titulo"].eq("Tesouro Prefixado"), "PRE", "IPCA")
-    d = d.dropna(subset=["taxa"]).sort_values(["tipo", "data", "anos"])
+    d = d.dropna(subset=["taxa"])
+    d = d[d.anos >= 0.5].sort_values(["tipo", "data", "anos"])      # titulo vencendo em meses distorce a taxa (projecao do IPCA)
     out = {}
     for t, g in d.groupby("tipo"):
         por_dia = {k: (x.anos.values, x.taxa.values) for k, x in g.groupby("data")}
@@ -911,7 +912,7 @@ CAT_CORES = ["#2a78d6", "#1baf7a", "#eda100", "#e87ba4", "#4a3aa7", "#008300", "
 NOSSAS_CORES = ["#eb6834", "#c24f1d", "#f29a6b", "#a8401a", "#f5b38d"]
 GENERICO = (r"(?i)\b(FUNDO DE INVESTIMENTO|FUNDO|EM DIREITOS CREDIT[OÓ]RIOS|DE INVESTIMENTO|FIDC|FIC|FI|COTAS|MULTIMERCADO|"
             r"RENDA FIXA|CR[EÉ]DITO PRIVADO|RESPONSABILIDADE LIMITADA|RESP LTDA|N[AÃ]O PADRONIZADO|NP|LONGO PRAZO|LP)\b")
-METODO = 18                                     # suba quando mudar o calculo -> refaz o cache do dia
+METODO = 20                                     # suba quando mudar o calculo -> refaz o cache do dia
 CAIXA = ("Caixa",)
 CAIXA_CVM = ("Disponibilidades", "Operações Compromissadas", "Valores a receber", "Valores a pagar", lt.AJUSTE)
 TIPO_CASA = {"CDB/ RDB": "CDB", "CDB Vinculado": "CDB", "DPGE": "DPGE", "FI Imobiliário": "FII", "FI Participações": "FIP",
@@ -1065,7 +1066,7 @@ class Contexto:
         ser = ser.dropna(subset=["spread"])
         sr = ser.serie.str.contains("Senior|Sênior", case=False, na=False)
         self.fidc_ser = {k: (x.cota.values, x.spread.values, float(x.spread[sr[x.index]].median()) if sr[x.index].any() else float(x.spread.median()),
-                             x.cota_ant.values, x.rt.values) for k, x in ser.groupby(["cnpj", "mes"])}
+                             x.cota_ant.values, x.rt.values, x.rent.values / 100) for k, x in ser.groupby(["cnpj", "mes"])}
         self.taxas = lt.taxas()
         self.ust = lt.treasury()
         px = self.ptax.groupby(self.ptax.index.strftime("%Y-%m")).last()
@@ -1125,9 +1126,12 @@ class Contexto:
         x = self.fidc_ser.get((cnpj, m))
         if x is None or not np.isfinite(pu_ant) or pu_ant <= 0:
             return np.nan
-        ant, rt = x[3], x[4]
+        ant, rt, rent = x[3], x[4], x[5]
         dif = np.abs(ant / pu_ant - 1)
-        return float(rt[np.nanargmin(dif)]) if np.isfinite(dif).any() and np.nanmin(dif) < 0.02 else np.nan
+        if not np.isfinite(dif).any() or np.nanmin(dif) >= 0.02:
+            return np.nan
+        i = np.nanargmin(dif)                   # rentabilidade oficial do mes (X_3); cota + amortizacao so se ela faltar/absurda
+        return float(rent[i]) if np.isfinite(rent[i]) and -0.2 < rent[i] < 0.1 else float(rt[i])
 
     def pagto_snd(self, cods, p, m, pu_ant):
         """Debenture do SND: o que foi pago no mes por unidade (amortizacao + juros) = PU par do mes anterior corrigido
@@ -1589,6 +1593,15 @@ def detalhe(nome, cnpj, df, ctx, pl, rent):
             # preco ja corrigido entre fundos: marcacao a mercado entra direto; queda > 25% no mes so se persistir
             ok = np.isfinite(rt) & (rt < 0.3) & ((rt > -0.25) | ((rt > -0.8) & persiste(rt)))
             r = r.mask(ok, rt)
+        # titulos publicos: preco do Tesouro + cupom semestral no mes de pagamento (NTN-B 6% a.a., NTN-F 10% a.a.)
+        tpm = w.casa.eq("Títulos Públicos").values & np.isfinite(pu0) & np.isfinite(pu1)
+        if tpm.any():
+            mv = pd.to_datetime(w.venc).dt.month.values
+            mm = int(m[5:])
+            cup = np.where((w.tp.values == "NTN-B") & ((mm == mv) | (mm == (mv + 5) % 12 + 1)), 1.06 ** 0.5 - 1,
+                           np.where((w.tp.values == "NTN-F") & np.isin(mm, [1, 7]), 1.10 ** 0.5 - 1, 0.0))
+            rtp = (pu1 * (1 + 0) + pu0 * cup) / pu0 - 1
+            r = r.mask(tpm & np.isfinite(rtp) & (rtp > -0.2) & (rtp < 0.2), rtp)
         fid = w.casa.eq("FIDC").values
         if fid.any():
             rf = np.full(len(w), np.nan)
