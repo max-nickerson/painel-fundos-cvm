@@ -32,17 +32,28 @@ import requests
 # ------------------------------------------------------------------ CONFIGURACAO (edite aqui)
 NOSSOS_FUNDOS = {               # nome curto: CNPJ (qualquer formato)
     "DUAL": "34.803.938/0001-61",
+    "DUAL_GLOBAL": "62.917.953/0001-76",
+    "PRECISION_PM": "32.292.528/0001-78",
 }
 PEERS = {
-    "AZ_ALTRO": "22.100.009/0001-07",
-    "SPARTA_TOP": "14.188.162/0001-00",
-    "XP_CE120": "22.003.930/0001-31",
-    "CAPITANIA_P45": "20.146.294/0001-71",
-    "KINEA_CP_PREV": "26.491.419/0001-87",
-    "IBIUNA_CREDIT": "37.310.657/0001-65",
-    "DAYCOVAL_CLASSIC": "10.783.480/0001-68",
-    "BRADESCO_BONUS": "20.216.829/0001-33",
-    "RIZA_LOTUS_PREV": "43.423.186/0001-02",
+    "AZ_ALTRO": "22.100.009/0001-07", "SPARTA_TOP": "14.188.162/0001-00", "XP_CE120": "22.003.930/0001-31",
+    "CAPITANIA_P45": "20.146.294/0001-71", "KINEA_CP_PREV": "26.491.419/0001-87", "IBIUNA_CREDIT": "37.310.657/0001-65",
+    "DAYCOVAL_CLASSIC": "10.783.480/0001-68", "RIZA_LOTUS_PREV": "43.423.186/0001-02",
+    "BRADESCO_CP_PLUS": "32.387.924/0001-89", "MAPFRE_CONFIANZA": "51.253.495/0001-00", "CAIXA_MAXI": "17.322.725/0001-07",
+    "KINEA_RF_CP": "41.978.506/0001-57", "REGIA_EQUILIBRIO": "53.828.295/0001-55", "BNP_CREDITO_PLUS": "17.137.984/0001-50",
+    "OCCAM_LIQUIDEZ": "46.098.897/0001-39", "SANTANDER_INFRA_CDI": "51.672.063/0001-25", "BTG_CRED_CORP": "14.557.317/0001-38",
+    "XP_LIQUIDEZ": "51.488.342/0001-33", "SPX_SEAHAWK": "35.491.217/0001-26", "WESTERN_TOTAL_CREDIT": "28.320.756/0001-37",
+    "SULAMERICA_CRED_ATIVO": "13.823.084/0001-05", "SAFRA_VITESSE": "58.735.449/0001-88", "JGP_DEB_CDI": "58.600.298/0001-50",
+    "COMPASS_CREDIT": "35.399.404/0001-84", "SVN_RF_CP": "51.825.326/0001-99", "VINLAND_CORE": "56.415.717/0001-59",
+    "POLO_CRED_CORP": "56.974.598/0001-74", "ASA_ALM": "50.911.242/0001-05",
+    "SICOOB_INSTITUCIONAL": "14.702.111/0001-54", "ICATU_VANGUARDA": "64.203.379/0001-10", "SOMMA_QP": "24.249.979/0001-02",
+    "ANGA_CRED_ESTR": "23.034.819/0001-75", "MAG_ZONA_MATA": "41.594.651/0001-34", "LEGACY_COMPOUND": "50.891.130/0001-30",
+    "XP_AUGME_XPCE": "67.007.466/0001-90", "ARX_INFRA": "63.920.768/0001-01", "UBS_EVOLUTION": "56.049.361/0001-87",
+    "WRIGHT_CRED2": "53.179.441/0001-69", "VALORA_ABSOLUTE": "10.326.625/0001-00", "INTER_POLARIS": "64.156.687/0001-31",
+    "SICREDI_INFRA": "61.734.698/0001-63", "PLURAL_DEB_INC": "58.052.836/0001-10", "CAPITANIA_INFRA90": "52.248.139/0001-52",
+    "AUGME_MRT2": "27.347.344/0001-28", "V8_MERCURY": "58.398.452/0001-53", "A1_HIGH_GRADE": "57.815.131/0001-44",
+    "BANRISUL_CABERGS": "05.196.208/0001-41", "KILIMA_BANCOS": "49.272.086/0001-09", "PRINZ_LIQUIDEZ": "59.376.795/0001-80",
+    "TENAX_RFA": "53.293.548/0001-33", "DRYS_SHELTER": "52.282.978/0001-97", "JOURNEY_JCW": "57.594.567/0001-50",
 }
 DESDE = "2019-01"               # primeiro mes de carteira/cota (CDA existe desde 2005; mais antigo = mais download na 1a vez)
 # grupo economico: a CVM so informa o emissor. Regra = trecho do nome do emissor (sem acento, maiusculo) -> grupo.
@@ -837,7 +848,7 @@ CAT_CORES = ["#2a78d6", "#1baf7a", "#eda100", "#e87ba4", "#4a3aa7", "#008300", "
 NOSSAS_CORES = ["#eb6834", "#c24f1d", "#f29a6b", "#a8401a", "#f5b38d"]
 GENERICO = (r"(?i)\b(FUNDO DE INVESTIMENTO|FUNDO|EM DIREITOS CREDIT[OÓ]RIOS|DE INVESTIMENTO|FIDC|FIC|FI|COTAS|MULTIMERCADO|"
             r"RENDA FIXA|CR[EÉ]DITO PRIVADO|RESPONSABILIDADE LIMITADA|RESP LTDA|N[AÃ]O PADRONIZADO|NP|LONGO PRAZO|LP)\b")
-METODO = 10                                     # suba quando mudar o calculo -> refaz o cache do dia
+METODO = 13                                     # suba quando mudar o calculo -> refaz o cache do dia
 CAIXA = ("Caixa",)
 CAIXA_CVM = ("Disponibilidades", "Operações Compromissadas", "Valores a receber", "Valores a pagar", lt.AJUSTE)
 TIPO_CASA = {"CDB/ RDB": "CDB", "CDB Vinculado": "CDB", "DPGE": "DPGE", "FI Imobiliário": "FII", "FI Participações": "FIP",
@@ -975,10 +986,11 @@ class Contexto:
         self.fidc = {c: (x.mes.values, x.anos.values) for c, x in f.sort_values("mes").groupby("cnpj")}
         ser = ser[(ser.cota > 0) & ser.rent.notna()].sort_values(["cnpj", "serie", "mes"])
         e = (1 + ser.rent / 100) / (1 + ser.mes.map(self.cdi_m)) - 1
-        ser = ser.assign(e=e.where(e.abs() < 0.2))
-        ser["spread"] = ((1 + ser.groupby(["cnpj", "serie"]).e.transform(lambda x: x.rolling(6, min_periods=1).median())) ** 12 - 1) * 100
+        primeiro = ser.groupby(["cnpj", "serie"]).cumcount() == 0             # 1o mes da serie e parcial
+        ser = ser.assign(e=e.where(~primeiro & (e > -0.03) & (e < 0.2)))       # < -3% no mes: amortizacao/evento pontual
+        ser["spread"] = ((1 + ser.groupby(["cnpj", "serie"]).e.transform(lambda x: x.rolling(6, min_periods=2).median())) ** 12 - 1) * 100
         esp = ((1 + ser.esperado / 100) / (1 + ser.mes.map(self.cdi_m))) ** 12 * 100 - 100        # benchmark da serie (X_6)
-        ruim = ~((ser.spread > -5) & (ser.spread < 30))
+        ruim = ~((ser.spread > -30) & (ser.spread < 40))                 # perda recorrente aparece; absurdo vira benchmark
         ser["spread"] = ser.spread.mask(ruim, esp.where((ser.esperado > 0) & (esp > -5) & (esp < 30)))
         ser = ser.dropna(subset=["spread"])
         sr = ser.serie.str.contains("Senior|Sênior", case=False, na=False)
@@ -990,6 +1002,7 @@ class Contexto:
         u = pd.Series({m: float(lt.curva(self.ust, "UST", fim_mes(m), np.array([1.0]))[0]) / 1200 for m in px.index}) if self.ust else pd.Series(dtype=float)
         self.ust_m = u.shift()
         self._taxas = {}
+        self.emissores = {}                       # (mes, grupo) -> soma spread*peso, duration*peso, peso
 
     def pu_par(self, m):
         return self.pu.get(self.pu_dia.get(m), pd.Series(dtype=float))
@@ -1218,7 +1231,7 @@ def mede(g, m, ctx, recentes, impl, ant=None):
     if m_f.any():
         v = np.full(n, np.nan)
         v[m_f] = [ctx.fidc_spread(c, m, p) for c, p in zip(cod[m_f], pu_f[m_f])]
-        poe(m_f & valido(v), v, d_fidc, "FIDC: rentabilidade da série (CVM)", "DI")
+        poe(m_f & np.isfinite(v) & (v > -30) & (v < 40), v, d_fidc, "FIDC: rentabilidade da série (CVM)", "DI")
     m5 = np.isnan(sp) & ~np.isin(ca, SEM_SPREAD)
     if m5.any() and len(impl):
         v = impl.reindex(pd.MultiIndex.from_arrays([[m] * n, g.chave.values])).values.astype(float)
@@ -1229,14 +1242,30 @@ def mede(g, m, ctx, recentes, impl, ant=None):
         ust = lt.curva(ctx.ust, "UST", fm, np.nan_to_num(anos, nan=5)) if ctx.ust else np.full(n, 4.5)
         _, d_b = taxa_e_duration(anos, 0.5, 0, 0, ust, np.nan_to_num(v), np.nan)
         d = np.where((ca == "Bonds") & tem_venc, d_b, d)
+        zero = np.isin(ca, ["LF", "LFSN", "CDB", "DPGE", "LCA", "NC", "CCB", "LCI/LH"])
+        _, d_g = taxa_e_duration(anos, np.where(zero, anos + 1, 0.5), 0, 0, cdi, np.nan_to_num(v), np.nan)
+        d = np.where(np.isnan(d) & tem_venc, d_g, d)
         poe(m5 & valido(v), v, d, np.where(usd, "implícito (preço em US$)", np.where(fid & np.isfinite(d), "implícito (cota) + prazo FIDC",
                                                                                         "implícito (preço)")).astype(object),
             np.where(usd, "USD", "DI").astype(object))
     # 6) renda variavel: nao se aplica
     na = np.isin(ca, SEM_SPREAD) & np.isnan(sp)
     fonte[na] = np.where(ca[na] == "Confidencial", "confidencial (CVM)", "não se aplica")
-    # 7) o que faltar: media da mesma categoria no fundo/mes; senao media do credito do fundo
+    # 7) o que faltar: mesmo emissor (neste fundo ou em outro fundo no mes); senao media da categoria; senao do fundo
     w = g.perc_pl.values.astype(float)
+    gr = g.grupo.fillna("").values.astype(str)
+    ok = np.isfinite(sp) & np.isfinite(du) & ~na & (w > 0) & ~np.isin(ca, ["Caixa", "Títulos Públicos"])         & ~np.char.startswith(fonte.astype(str), "estimado")
+    for nome_g in np.unique(gr[ok]):                                    # alimenta o mapa de emissores do mes
+        x = ok & (gr == nome_g)
+        a = ctx.emissores.setdefault((m, nome_g), [0.0, 0.0, 0.0])
+        a[0] += (sp[x] * w[x]).sum(); a[1] += (du[x] * w[x]).sum(); a[2] += w[x].sum()
+    sem = np.isnan(sp) & ~na
+    for nome_g in np.unique(gr[sem]):
+        a = ctx.emissores.get((m, nome_g)) if nome_g else None
+        if a and a[2] > 0:
+            sel = sem & (gr == nome_g)
+            sp[sel], fonte[sel], ind[sel] = a[0] / a[2], "estimado (mesmo emissor)", "DI"
+            du[sel] = np.where(np.isnan(du[sel]), a[1] / a[2], du[sel])
     falta_s, falta_d = np.isnan(sp) & ~na, np.isnan(du) & ~na
     if falta_s.any() or falta_d.any():
         cred = ~np.isin(ca, ["Caixa", "Títulos Públicos"]) & ~na & (w > 0)
@@ -1273,6 +1302,8 @@ def derivativos_mes(gd, m, ctx, dur_ipca, dur_pre):
         tipo, venc = contrato(f"{r.codigo or ''} {r.ativo or ''} {r.tipo_ativo or ''}")
         if "mercado futuro" not in str(r.categoria).lower():   # termo/opcao/swap: sem P&L de futuro
             tipo, venc = "OUTRO", None
+        if tipo in ("DI1", "DAP") and not venc:                 # sem vencimento nao da para saber o prazo (ex.: trava de curva)
+            tipo = "OUTRO"
         lado = -1 if "vendida" in str(r.categoria).lower() else 1
         n = abs(r.quantidade) if pd.notna(r.quantidade) else np.nan
         if venc:

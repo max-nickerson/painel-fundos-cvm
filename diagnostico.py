@@ -41,11 +41,11 @@ def fundo(f, d, alertas, datas):
     q = pd.Series(f["cota"], index=datas, dtype=float).dropna() if f["cota"] else pd.Series(dtype=float)
     if q.empty:
         a("info", "sem cota diária na CVM para este CNPJ (sem retorno)")
-    saltos = q.pct_change()[lambda x: x.abs() > 0.02]
+    saltos = q.pct_change()[lambda x: (x.abs() > 0.02) & (x.index >= q.index.max() - pd.DateOffset(months=24))] if len(q) else q
     r["saltos_cota"] = len(saltos)
     if len(saltos):
         ex = ", ".join(f"{t:%d/%m/%y} {v:+.1%}" for t, v in saltos.tail(3).items())
-        a("aviso", f"cota com {len(saltos)} salto(s) > 2% num dia (ex.: {ex}): amortização/distribuição ou marcação irregular — % do CDI pouco comparável")
+        a("aviso", f"cota com {len(saltos)} salto(s) > 2% num dia nos últimos 24 meses (ex.: {ex}): amortização/distribuição ou marcação irregular — % do CDI pouco comparável")
     if not f["tem_carteira"]:
         a("info", "sem carteira na CVM para este CNPJ (só cota/retorno)")
         return r, []
@@ -73,7 +73,10 @@ def fundo(f, d, alertas, datas):
     r.update(buracos=len(buracos), estimado=round(est, 1), mercado=round(mercado, 1))
     at = pd.read_parquet(d / f"{f['id']}_ativos.parquet")
     au = at[at.mes == U["mes"]]
-    fora = au[(au.spread < -5) | (au.spread > 30) | (au.duration < 0) | (au.duration > 30)]
+    fidc_ruim = au.fonte.fillna("").str.startswith("FIDC") & (au.spread < -5)          # retorno oficial abaixo do CDI: real
+    for x in au[fidc_ruim].itertuples():
+        a("info", f"{U['mes']}: FIDC {x.rotulo} rendendo abaixo do CDI (spread {x.spread:.1f}% pela rentabilidade oficial da série)")
+    fora = au[~fidc_ruim & ((au.spread < -5) | (au.spread > 30) | (au.duration < 0) | (au.duration > 30))]
     for x in fora.itertuples():
         a("aviso", f"{U['mes']}: {x.rotulo} spread {x.spread:.2f} / duration {x.duration:.2f} ({x.fonte})")
     if r["spread"] is not None and not -1 <= r["spread"] <= 10:
@@ -101,7 +104,7 @@ def fundo(f, d, alertas, datas):
             if abs(m["resid"]) > LIM["resid_mes"]:
                 a("aviso", f"{m['mes']}: resíduo {m['resid']:+.2f} pp (real {m['real']:.2f}%, hedge {m['hedge']:+.2f} pp)")
         if abs(res12) > LIM["resid_12m"]:
-            a("aviso", f"resíduo de 12 meses {res12:+.2f} pp")
+            a("aviso", f"resíduo de 12 meses {res12:+.2f} pp (inclui taxas de administração/performance, swaps e perdas não marcadas a mercado)")
         ret12 = np.prod([1 + m["real"] / 100 for m in ult]) - 1
         cdi12 = np.prod([1 + m["cdi"] / 100 for m in ult]) - 1
         r.update(ret_12m=round(ret12 * 100, 2), pct_cdi=round(ret12 / cdi12 * 100, 1) if cdi12 else None,
