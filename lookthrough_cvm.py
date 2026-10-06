@@ -67,6 +67,7 @@ WORKERS = 4
 URL = "https://dados.cvm.gov.br/dados/FI/DOC"
 CACHE = Path(os.environ.get("PAINEL_DADOS") or Path(__file__).resolve().parent / "dados_painel")   # pasta ao lado do .py
 (CACHE / "rec").mkdir(parents=True, exist_ok=True)
+VERSAO_DIARIO = 4               # recorte das cotas diarias (3: fundos que so informam cota por subclasse)
 VERSAO = 2                      # muda quando o recorte guarda colunas novas (forca reprocessar)
 REN = {"CNPJ_FUNDO": "CNPJ_FUNDO_CLASSE", "CNPJ_FUNDO_COTA": "CNPJ_FUNDO_CLASSE_COTA",
        "NM_FUNDO_COTA": "NM_FUNDO_CLASSE_SUBCLASSE_COTA"}             # nomes antigos (ate 2022) -> novos
@@ -77,7 +78,7 @@ COLS = {"CNPJ_FUNDO_CLASSE", "DT_COMPTC", "TP_APLIC", "TP_ATIVO", "VL_MERC_POS_F
         "CNPJ_EMISSOR", "CPF_CNPJ_EMISSOR", "DS_SWAP", "CD_SWAP", "DS_ATIVO_EXTERIOR", "CD_ATIVO_BV_MERC", "PAIS",
         "DS_INDEXADOR_POSFX", "GRAU_RISCO", "AG_RISCO", *NUM} | set(REN)
 PASSIVO = r"(?i)a pagar|obriga|exigibilidade"                        # entram negativos (PL = ativos - passivos)
-DERIV = r"(?i)mercado futuro|opç|swap|termo"   # derivativos vem pelo nocional: fora da soma de 100% e dos graficos
+DERIV = r"(?i)mercado futuro|opç|swap"   # derivativos (nocional): fora dos 100%; termo de acoes e posicao real e entra
 AJUSTE = "Ajuste carteira x PL"
 
 
@@ -135,7 +136,7 @@ def marca(kind, m):
     f = CACHE / "rec" / f"{kind}_{m}.json"
     try:
         j = json.loads(f.read_text())
-        return set(j["fundos"]) if isinstance(j, dict) and j.get("v") == VERSAO else None
+        return set(j["fundos"]) if isinstance(j, dict) and j.get("v") == (VERSAO_DIARIO if kind == "diario" else VERSAO) else None
     except (OSError, ValueError):
         return None
 
@@ -199,10 +200,19 @@ def processa_diario(url, meses, peers):
     d = pd.concat([le(z, n, cols) for n in z.namelist()], ignore_index=True)
     alvo = set(peers).union(*[marca("diario", m) or set() for m in meses])   # mantem quem ja estava no recorte
     d = d[d.CNPJ_FUNDO_CLASSE.isin(alvo)]
-    d = d[d.ID_SUBCLASSE.isna()] if "ID_SUBCLASSE" in d else d          # classe (nao subclasses)
+    if "ID_SUBCLASSE" in d:                       # cota da classe; se a classe so informa por subclasse, a de maior PL
+        cls = d[d.ID_SUBCLASSE.isna()]
+        tem = set(zip(cls.CNPJ_FUNDO_CLASSE, cls.DT_COMPTC))                 # decide dia a dia (fundo migrando no mes)
+        sub = d[d.ID_SUBCLASSE.notna()]
+        sub = sub[[k not in tem for k in zip(sub.CNPJ_FUNDO_CLASSE, sub.DT_COMPTC)]]
+        if len(sub):
+            pl = pd.to_numeric(sub.VL_PATRIM_LIQ, errors="coerce").groupby([sub.CNPJ_FUNDO_CLASSE, sub.ID_SUBCLASSE]).sum()
+            maior = pl.groupby(level=0).idxmax().map(lambda t: t[1])
+            sub = sub[sub.ID_SUBCLASSE == sub.CNPJ_FUNDO_CLASSE.map(maior)]
+        d = pd.concat([cls, sub], ignore_index=True)
     for m in meses:
         d[d.DT_COMPTC.str[:7] == m].to_parquet(CACHE / "rec" / f"diario_{m}.parquet", index=False)
-        (CACHE / "rec" / f"diario_{m}.json").write_text(json.dumps({"v": VERSAO, "fundos": sorted(alvo)}))
+        (CACHE / "rec" / f"diario_{m}.json").write_text(json.dumps({"v": VERSAO_DIARIO, "fundos": sorted(alvo)}))
     return url
 
 
@@ -510,27 +520,32 @@ def _prazo_fidc(z, nome):
 
 
 def _series_fidc(z, n2, n3, n6):
-    """Valor da cota (tab X_2), rentabilidade do mes (X_3) e desempenho esperado (X_6) de cada classe/serie de cada FIDC."""
+    """Valor e quantidade de cotas (tab X_2), rentabilidade do mes (X_3), desempenho esperado (X_6) e amortizacoes
+    pagas no mes (X_4) de cada classe/serie de cada FIDC."""
     le = lambda n: pd.read_csv(z.open(n), sep=";", encoding="latin1", dtype=str, quoting=3)
     a, b = le(n2), le(n3)
+    n4 = n2.replace("_X_2_", "_X_4_")
+    am = le(n4) if n4 in z.namelist() else pd.DataFrame(columns=list(a.columns[:4]) + ["TAB_X_TP_OPER", "TAB_X_CLASSE_SERIE", "TAB_X_VL_TOTAL"])
     e = le(n6) if n6 in z.namelist() else pd.DataFrame(columns=list(a.columns[:4]) + ["TAB_X_CLASSE_SERIE", "TAB_X_PR_DESEMP_ESPERADO"])
     c = "CNPJ_FUNDO_CLASSE" if "CNPJ_FUNDO_CLASSE" in a.columns else "CNPJ_FUNDO"
     e = e.rename(columns={"CNPJ_FUNDO": c}) if c not in e.columns else e
-    for t in (a, b, e):
+    am = am.rename(columns={"CNPJ_FUNDO": c}) if c not in am.columns else am
+    am = am[am.TAB_X_TP_OPER.fillna("").str.contains("Amortiza")].copy()
+    for t in (a, b, e, am):
         t["n"] = t.groupby([c, "DT_COMPTC", "TAB_X_CLASSE_SERIE"]).cumcount()
     k = [c, "DT_COMPTC", "TAB_X_CLASSE_SERIE", "n"]
-    x = a.merge(b, on=k, how="outer").merge(e[k + ["TAB_X_PR_DESEMP_ESPERADO"]], on=k, how="left")
+    x = a.merge(b, on=k, how="outer").merge(e[k + ["TAB_X_PR_DESEMP_ESPERADO"]], on=k, how="left")         .merge(am[k + ["TAB_X_VL_TOTAL"]], on=k, how="left")
     num = lambda s: pd.to_numeric(s.str.replace(",", ".", regex=False), errors="coerce")
     return pd.DataFrame({"cnpj": x[c].values, "mes": x.DT_COMPTC.str[:7].values, "serie": x.TAB_X_CLASSE_SERIE.str.strip().values,
-                         "cota": num(x.TAB_X_VL_COTA).values, "rent": num(x.TAB_X_VL_RENTAB_MES).values,
-                         "esperado": num(x.TAB_X_PR_DESEMP_ESPERADO).values})
+                         "cota": num(x.TAB_X_VL_COTA).values, "qt": num(x.TAB_X_QT_COTA).values, "rent": num(x.TAB_X_VL_RENTAB_MES).values,
+                         "esperado": num(x.TAB_X_PR_DESEMP_ESPERADO).values, "amort": num(x.TAB_X_VL_TOTAL).fillna(0).values})
 
 
 def fidc_mensal(desde, log=print):
     """Do informe mensal de FIDC da CVM: (1) prazo medio (anos) dos recebiveis a vencer de cada FIDC (tabela V) =
     duration estimada da cota; (2) valor da cota e rentabilidade de cada classe/serie (tabelas X_2/X_3) = spread da
     serie que o fundo tem. Guarda so o resultado (pequeno), nao os zips."""
-    f, fs = CACHE / "fidc_prazo3.parquet", CACHE / "fidc_series3.parquet"
+    f, fs = CACHE / "fidc_prazo4.parquet", CACHE / "fidc_series4.parquet"
     tem = pd.read_parquet(f) if f.exists() else pd.DataFrame(columns=["cnpj", "mes", "anos"])
     ser = [pd.read_parquet(fs)] if fs.exists() else []
     feitos = set(tem.mes)
@@ -558,7 +573,31 @@ def fidc_mensal(desde, log=print):
         tem = pd.concat([tem] + novos, ignore_index=True).drop_duplicates(["cnpj", "mes"], keep="last")
         tem.to_parquet(f, index=False)
         pd.concat(ser, ignore_index=True).drop_duplicates(["cnpj", "mes", "serie", "cota"], keep="last").to_parquet(fs, index=False)
-    return tem, (pd.concat(ser, ignore_index=True) if ser else pd.DataFrame(columns=["cnpj", "mes", "serie", "cota", "rent", "esperado"]))
+    return tem, (pd.concat(ser, ignore_index=True) if ser else pd.DataFrame(columns=["cnpj", "mes", "serie", "cota", "qt", "rent", "esperado", "amort"]))
+
+
+def taxas():
+    """Taxa de administracao e de performance (com o benchmark) de cada fundo: extrato anual da CVM, ultimo informado."""
+    partes = []
+    for a in range(max(int(DESDE[:4]), 2019), date.today().year + 1):
+        f = CACHE / f"extrato_fi_{a}.csv"
+        if not f.exists() or (a == date.today().year and _diario(f)):
+            try:
+                f.write_bytes(_get(f"{URL}/EXTRATO/DADOS/extrato_fi_{a}.csv", tent=2))
+            except requests.RequestException:
+                pass
+        if f.exists():
+            t = pd.read_csv(f, sep=";", encoding="latin1", dtype=str, quoting=3)
+            t = t.rename(columns={"CNPJ_FUNDO": "CNPJ_FUNDO_CLASSE"})
+            partes.append(t[[c for c in ["CNPJ_FUNDO_CLASSE", "DT_COMPTC", "TAXA_ADM", "TAXA_PERFM", "PARAM_TAXA_PERFM",
+                                         "PR_INDICE_REFER_TAXA_PERFM"] if c in t.columns]])
+    if not partes:
+        return {}
+    t = pd.concat(partes, ignore_index=True).sort_values("DT_COMPTC").drop_duplicates("CNPJ_FUNDO_CLASSE", keep="last")
+    num = lambda c: pd.to_numeric(t[c].str.replace(",", ".", regex=False), errors="coerce") if c in t.columns else np.nan
+    t = t.assign(adm=num("TAXA_ADM"), perf=num("TAXA_PERFM"), pct=num("PR_INDICE_REFER_TAXA_PERFM"))
+    return {c: (a if a == a else 0.0, p if p == p else 0.0, str(par or ""), q if q == q and q > 0 else 100.0)   # 0 = nao informado
+            for c, a, p, par, q in zip(t.CNPJ_FUNDO_CLASSE, t.adm, t.perf, t.get("PARAM_TAXA_PERFM", ""), t.pct)}
 
 
 def treasury():
@@ -698,6 +737,30 @@ def diario(nomes, dia):
         d[c] = pd.to_numeric(d[c], errors="coerce")
     d = d.drop_duplicates(["CNPJ_FUNDO_CLASSE", "DT_COMPTC"], keep="last").sort_values("DT_COMPTC")
     return d.assign(data=pd.to_datetime(d.DT_COMPTC), mes=d.DT_COMPTC.str[:7], fundo=d.CNPJ_FUNDO_CLASSE.map(nome))
+
+
+def distribuicoes(d):
+    """Fundos que distribuem rendimentos (ex.: infra "renda"): a cota cai todo mes no dia da distribuicao e nao mostra
+    o retorno total. Detecta queda > 0,4% (bem abaixo do normal do fundo) no inicio do mes, em >= 60% dos meses, e
+    reconstroi a cota de retorno total somando a distribuicao de volta. Devolve (d ajustado, {fundo: (n, media %)})."""
+    partes, info = [], {}
+    for n, g in d.groupby("fundo", sort=False):
+        g = g.sort_values("data").copy()
+        q = g.VL_QUOTA.values.astype(float)
+        if len(q) < 60:
+            partes.append(g); continue
+        r = np.r_[0.0, q[1:] / q[:-1] - 1]
+        base = pd.Series(r).rolling(21, min_periods=5, center=True).median().values
+        cand = (r < -0.004) & (r < base - 0.004) & (g.data.dt.day.values <= 12)
+        meses_cand = pd.Series(g.mes.values[cand]).unique()
+        if len(meses_cand) >= 6:
+            ini, fim = pd.Period(meses_cand.min()), pd.Period(meses_cand.max())
+            if len(meses_cand) >= 0.6 * ((fim - ini).n + 1):
+                info[n] = (int(cand.sum()), float(-np.mean(r[cand]) * 100))
+                r = np.where(cand, base, r)
+                g["VL_QUOTA"] = q[0] * np.cumprod(1 + np.nan_to_num(r))
+        partes.append(g)
+    return (pd.concat(partes, ignore_index=True) if partes else d), info
 
 
 def rentabilidade(d, cdi):

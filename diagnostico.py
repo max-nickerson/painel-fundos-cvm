@@ -12,6 +12,7 @@ Confere, por fundo:
   4. retorno: categorias somam o retorno real da cota; residuo e hedge por mes
   5. modelo de spread pelo preco (SND) contra a ANBIMA no ultimo dia disponivel
   6. cota diaria com saltos (> 2% num dia): amortizacao/distribuicao/marcacao irregular -> % do CDI pouco comparavel
+  7. retorno da cota x Mais Retorno (12 meses e mes a mes) e soma do P&L dos ativos - taxas x retorno da cota
 """
 import json
 import sys
@@ -106,10 +107,51 @@ def fundo(f, d, alertas, datas):
         if abs(res12) > LIM["resid_12m"]:
             a("aviso", f"resíduo de 12 meses {res12:+.2f} pp (inclui taxas de administração/performance, swaps e perdas não marcadas a mercado)")
         ret12 = np.prod([1 + m["real"] / 100 for m in ult]) - 1
+        ativos12 = np.prod([1 + (m["real"] - m["resid"]) / 100 for m in ult]) - 1          # soma do P&L dos ativos - taxas
+        r["ativos_menos_taxas_12m"] = round(ativos12 * 100, 2)
+        r["taxas_12m"] = round(sum(m.get("taxas", 0) for m in ult), 2)
         cdi12 = np.prod([1 + m["cdi"] / 100 for m in ult]) - 1
         r.update(ret_12m=round(ret12 * 100, 2), pct_cdi=round(ret12 / cdi12 * 100, 1) if cdi12 else None,
                  hedge_12m=round(sum(m["hedge"] for m in ult), 2), resid_12m=round(res12, 2), fecho=round(fecho, 4))
     return r, cats
+
+
+def mais_retorno(V, alertas):
+    """Retorno pela cota x Mais Retorno (cota ajustada): mesmo periodo, 12 meses e mes a mes nos ultimos 24."""
+    import requests
+    H = {"User-Agent": "Mozilla/5.0", "Referer": "https://maisretorno.com/"}
+    datas = pd.to_datetime(V["datas"])
+    linhas = []
+    for f in V["fundos"]:
+        a = pd.Series(f["cota"], index=datas, dtype=float).dropna() if f["cota"] else pd.Series(dtype=float)
+        try:
+            j = requests.get(f"https://data.maisretorno.com/mr-data/v4/general/quotes/{f['id']}:fi?adjusted=true&link_old_historic=true",
+                             headers=H, timeout=60).json()
+        except Exception:
+            j = {}
+        q = j.get("quotes") or []
+        b = pd.Series([x["c"] for x in q], index=pd.to_datetime([x["d"] for x in q]), dtype=float)
+        if a.empty or b.empty:
+            linhas.append({"fundo": f["nome"], "obs": "sem cota em um dos lados"})
+            if b.empty != a.empty:
+                alertas.append({"fundo": f["nome"], "nivel": "aviso", "alerta": f"cota só {'na Mais Retorno' if a.empty else 'no painel'}"})
+            continue
+        fim = min(a.index.max(), b.index.max())
+        ini = fim - pd.DateOffset(years=1)
+        r = lambda s: s[s.index <= fim].iloc[-1] / s[s.index <= ini].iloc[-1] - 1 if (s.index <= ini).any() else np.nan
+        ma = a[a.index <= fim].resample("ME").last().pct_change().tail(24)
+        mb = b[b.index <= fim].resample("ME").last().pct_change().tail(24)
+        dm = ((ma - mb).abs() * 100).max()
+        d12 = (r(a) - r(b)) * 100
+        linhas.append({"fundo": f["nome"], "ate": fim.date(), "painel_12m": round(r(a) * 100, 3), "mais_retorno_12m": round(r(b) * 100, 3),
+                       "dif_12m_pp": round(d12, 3), "maior_dif_mes_pp": round(dm, 3)})
+        if f.get("distribui"):                    # painel usa retorno total; a Mais Retorno mostra so a cota
+            alertas.append({"fundo": f["nome"], "nivel": "info", "alerta": f"distribui rendimentos (~{f['distribui'][1]:.2f}% por vez): painel "
+                            f"{r(a) * 100:.2f}% em retorno total x Mais Retorno {r(b) * 100:.2f}% só pela cota"})
+            linhas[-1]["obs"] = "distribui rendimentos: painel em retorno total"
+        elif (np.isfinite(d12) and abs(d12) > 0.05) or (np.isfinite(dm) and dm > 0.05):
+            alertas.append({"fundo": f["nome"], "nivel": "erro", "alerta": f"retorno difere da Mais Retorno (12m {d12:+.3f} pp, maior mês {dm:.3f} pp)"})
+    return pd.DataFrame(linhas)
 
 
 def valida_modelo():
@@ -154,6 +196,8 @@ def main():
         linhas.append(r)
         cats += c
     res = pd.DataFrame(linhas)
+    print("Comparando o retorno de cada fundo com a Mais Retorno...")
+    mr = mais_retorno(V, alertas)
     al = pd.DataFrame(alertas, columns=["fundo", "nivel", "alerta"])
     print("Validando o modelo de spread pelo preço contra a ANBIMA...")
     try:
@@ -163,9 +207,15 @@ def main():
     pd.set_option("display.width", 250)
     pd.set_option("display.max_columns", 30)
     cols = [c for c in ["fundo", "ultimo_aberto", "meses", "spread", "duration", "mercado", "estimado", "buracos", "ret_12m",
-                        "pct_cdi", "hedge_12m", "resid_12m", "saltos_cota"] if c in res.columns]
+                        "pct_cdi", "ativos_menos_taxas_12m", "taxas_12m", "resid_12m", "saltos_cota"] if c in res.columns]
     print("\n== Resumo (último mês aberto; retorno/resíduo em 12 meses) ==")
     print(res[cols].round(2).to_string(index=False))
+    if len(mr) and "dif_12m_pp" in mr.columns:
+        dist = mr.obs.fillna("").str.startswith("distribui") if "obs" in mr.columns else pd.Series(False, index=mr.index)
+        comp = mr[~dist]
+        ok = comp.dif_12m_pp.abs().le(0.05).sum()
+        print(f"\n== Retorno x Mais Retorno: {ok} de {comp.dif_12m_pp.notna().sum()} fundos iguais (|dif 12m| <= 0,05 pp); "
+              f"{int(dist.sum())} distribui(em) rendimentos (painel em retorno total) ==")
     print("\n== Modelo de spread pelo preço x ANBIMA ==")
     print(mod.to_string(index=False) if len(mod) else "sem arquivo ANBIMA guardado")
     n = al.nivel.value_counts()
@@ -180,6 +230,7 @@ def main():
         al.to_excel(w, sheet_name="alertas", index=False)
         pd.DataFrame(cats).to_excel(w, sheet_name="categorias_fora_da_casa", index=False)
         mod.to_excel(w, sheet_name="modelo_x_anbima", index=False)
+        mr.to_excel(w, sheet_name="retorno_x_mais_retorno", index=False)
     print(f"\nExcel: {out}")
 
 
