@@ -27,7 +27,7 @@ CAT_CORES = ["#2a78d6", "#1baf7a", "#eda100", "#e87ba4", "#4a3aa7", "#008300", "
 NOSSAS_CORES = ["#eb6834", "#c24f1d", "#f29a6b", "#a8401a", "#f5b38d"]
 GENERICO = (r"(?i)\b(FUNDO DE INVESTIMENTO|FUNDO|EM DIREITOS CREDIT[OÓ]RIOS|DE INVESTIMENTO|FIDC|FIC|FI|COTAS|MULTIMERCADO|"
             r"RENDA FIXA|CR[EÉ]DITO PRIVADO|RESPONSABILIDADE LIMITADA|RESP LTDA|N[AÃ]O PADRONIZADO|NP|LONGO PRAZO|LP)\b")
-METODO = 8                                     # suba quando mudar o calculo -> refaz o cache do dia
+METODO = 9                                     # suba quando mudar o calculo -> refaz o cache do dia
 CAIXA = ("Caixa",)
 CAIXA_CVM = ("Disponibilidades", "Operações Compromissadas", "Valores a receber", "Valores a pagar", lt.AJUSTE)
 TIPO_CASA = {"CDB/ RDB": "CDB", "CDB Vinculado": "CDB", "DPGE": "DPGE", "FI Imobiliário": "FII", "FI Participações": "FIP",
@@ -37,7 +37,8 @@ CURTO_CVM = {"Depósitos a prazo e outros títulos de IF": "Outros títulos de I
              "Outros valores mobiliários registrados na CVM objeto de oferta pública": "Outros valores mobiliários",
              "Investimento no Exterior": "Exterior (outros)", "Títulos de Crédito Privado": "Crédito privado (outros)",
              "Cotas de Fundos": "Cotas de fundos"}
-SEM_SPREAD = ("Ações", "FII", "FIP", "ETF", "FIAGRO")            # renda variavel: spread e duration nao se aplicam
+SEM_SPREAD = ("Ações", "FII", "FIP", "ETF", "FIAGRO", "Confidencial")
+MERCADO = ("ANBIMA", "SND + preço do fundo")            # renda variavel: spread e duration nao se aplicam
 FUNDOS = ("FIDC", "FII", "FIP", "ETF", "FIAGRO", "Cotas de fundos", "Fundos offshore")
 USD = ("Bonds", "Fundos offshore", "Exterior (outros)")
 TP = [("LFT", r"BRSTNCLF|FINANCEIRAS DO TESOURO|LFT"), ("NTN-B", r"BRSTNCNTB|SERIE B|NTN-B"),
@@ -280,7 +281,8 @@ def casa(df, ctx):
     out = out.mask(lf, np.where(venc.dt.year >= 2049, "LFSC", np.where(longo, "LFSN", "LF")))
     out = out.mask(c.eq("Debêntures") & ~out.isin(["DEB", "DEBIN"]), "DEB")
     contabil = c.isin(CAIXA_CVM) | (c.str.contains(lt.PASSIVO, na=False) & ~df.derivativo)
-    return out.mask(contabil, "Caixa").mask(c.eq("Títulos Públicos"), "Títulos Públicos")
+    out = out.mask(contabil, "Caixa").mask(c.eq("Títulos Públicos"), "Títulos Públicos")
+    return out.mask(df.confidencial & ~df.derivativo, "Confidencial")       # CVM so informa o tipo, sem o ativo
 
 
 def rotulo(g, venc, tp):
@@ -319,7 +321,7 @@ def implicito(df, ctx):
     return ((1 + k.set_index(["mes", "chave"]).med) ** 12 - 1) * 100
 
 
-def mede(g, m, ctx, recentes, impl):
+def mede(g, m, ctx, recentes, impl, ant=None):
     """Spread CDI (% a.a., equivalente), duration (anos), PU, indexador e fonte de TODAS as linhas da carteira do mes.
     Preferencia: ANBIMA (mercado) > SND + preco do fundo (mercado) > taxa contratada (CVM) > implicito pelo preco >
     media da categoria. Renda variavel (acoes, FII, FIP, ETF, FIAGRO): nao se aplica."""
@@ -422,7 +424,7 @@ def mede(g, m, ctx, recentes, impl):
             np.where(usd, "USD", "DI").astype(object))
     # 6) renda variavel: nao se aplica
     na = np.isin(ca, SEM_SPREAD) & np.isnan(sp)
-    fonte[na] = "não se aplica"
+    fonte[na] = np.where(ca[na] == "Confidencial", "confidencial (CVM)", "não se aplica")
     # 7) o que faltar: media da mesma categoria no fundo/mes; senao media do credito do fundo
     w = g.perc_pl.values.astype(float)
     falta_s, falta_d = np.isnan(sp) & ~na, np.isnan(du) & ~na
@@ -441,6 +443,8 @@ def mede(g, m, ctx, recentes, impl):
                 x, orig = media(v, mc & ~falta), "estimado (média da categoria)"
                 if np.isnan(x):
                     x, orig = media(v, cred & ~falta), "estimado (média do fundo)"
+                if np.isnan(x) and ant:                  # FIC sem a carteira do fundo investido no mes
+                    x, orig = ant[0 if v is sp else 1], "estimado (carteira do mês anterior)"
                 v[sel] = x
                 if rotulo_ is None:
                     fonte[sel], ind[sel] = orig, "DI"
@@ -533,10 +537,10 @@ def detalhe(nome, cnpj, df, ctx, pl, rent):
     meses = sorted(df.mes.unique())
     recentes = set(meses[-4:])
     pl_f = {m: float(pl.get((m, cnpj), np.nan)) for m in meses}
-    cart_meses, ricos, tab_ativos = [], {}, []
+    cart_meses, ricos, tab_ativos, ant = [], {}, [], None
     for m in meses:
         g = df[df.mes == m]
-        e, dia = mede(g[~g.derivativo], m, ctx, recentes, impl)
+        e, dia = mede(g[~g.derivativo], m, ctx, recentes, impl, ant)
         ricos[m] = (e, g[g.derivativo])
         e["fin"] = e.perc_pl / 100 * pl_f[m] / 1e6
         cats = [{"categoria": c, "perc": x.perc_pl.sum(), "fin": x.fin.sum(), "spread": wavg(x.spread, x.perc_pl),
@@ -546,6 +550,8 @@ def detalhe(nome, cnpj, df, ctx, pl, rent):
                  "duration": wavg(e.duration, e.perc_pl)}
         pos = e[e.perc_pl > 0]
         fontes = (pos.groupby(pos.fonte.str.split(" · ").str[0]).perc_pl.sum() / max(pos.perc_pl.sum(), 1e-9) * 100).round(1)
+        if total["spread"] is not None and total["duration"] is not None:
+            ant = (total["spread"], total["duration"])
         cart_meses.append({"mes": m, "pl_mm": pl_f[m] / 1e6, "anbima": dia, "conf": e[e.confidencial].perc_pl.sum(),
                            "cats": cats, "total": total, "fontes": fontes.sort_values(ascending=False).to_dict()})
         # tabela de ativos do mes (rotulo curto), maior posicao primeiro
@@ -582,6 +588,16 @@ def detalhe(nome, cnpj, df, ctx, pl, rent):
         # 1) retorno de cada ativo: esperado = CDI + spread proprio; usa a variacao real de preco quando ela e critica
         #    (queda maior que 1,5 p.p. abaixo do esperado = pagamento de cupom/amortizacao -> fica o esperado)
         esperado = (1 + cdi_m) * (1 + w.spread.fillna(0).clip(-5, 30) / 100) ** (1 / 12) - 1
+        # + marcacao a mercado: -duration x (variacao da curva IPCA/pre no prazo + variacao do spread de mercado)
+        D = w.duration.fillna(0).clip(0, 30).values
+        dc = np.zeros(len(w))
+        for flag, t in ((w.ipca.values, "IPCA"), (w.pre.values, "PRE")):
+            if flag.any():
+                dc[flag] = lt.curva(ctx.curvas, t, fim_mes(m), D[flag]) - lt.curva(ctx.curvas, t, fim_mes(p), D[flag])
+        e1 = ricos[m][0].drop_duplicates("chave").set_index("chave")
+        ds = (w.chave.map(e1.spread) - w.spread).where(w.fonte.isin(MERCADO) & w.chave.map(e1.fonte).isin(MERCADO))
+        y = ctx.cdi_aa(p) / 100 + w.spread.fillna(0).values / 100
+        esperado = esperado - D / (1 + y) * (np.nan_to_num(dc) + ds.fillna(0).clip(-5, 5).values) / 100
         rp = w.chave.map(preco.loc[m]) if len(preco) and m in preco.index.get_level_values(0) else pd.Series(np.nan, index=w.index)
         r = rp.where(rp.notna() & (rp >= esperado - 0.015) & (rp <= esperado + 0.03), esperado)
         cx = w.casa.isin(CAIXA)
@@ -667,13 +683,19 @@ def precarrega(log=None):
         rent = lt.rentabilidade(d, ctx.cdi_m) if len(d) else pd.DataFrame(columns=["fundo", "mes", "retorno"])
         for i, (n, c, _) in enumerate(fundos, 1):
             escreve(f"[{i}/{len(fundos)}] {n}: look-through, carteira e atribuição...")
-            df = lt.lookthrough({n: c}, meses, carga)
             fid = re.sub(r"\D", "", c)
-            if len(df):
+            try:                                 # um fundo com problema nao derruba os outros
+                df = lt.lookthrough({n: c}, meses, carga)
+                if not len(df):
+                    escreve(f"   {n}: a CVM não tem carteira deste CNPJ no período (só cota/retorno).")
+                    continue
                 det, tab = detalhe(n, c, df, ctx, pl, rent)
-                (dest / (fid + ".json")).write_text(json.dumps(det), encoding="utf-8")
-                tab.to_parquet(dest / (fid + "_ativos.parquet"), index=False)
-                df.drop(columns=["chave", "fator"], errors="ignore").to_parquet(dest / (fid + ".parquet"), index=False)
+            except Exception as e:
+                escreve(f"   {n}: pulado ({type(e).__name__}: {e})")
+                continue
+            (dest / (fid + ".json")).write_text(json.dumps(det), encoding="utf-8")
+            tab.to_parquet(dest / (fid + "_ativos.parquet"), index=False)
+            df.drop(columns=["chave", "fator"], errors="ignore").to_parquet(dest / (fid + ".parquet"), index=False)
         # visao geral: cotas diarias de todos (para retorno em qualquer periodo, consolidado e risco x retorno)
         datas = sorted(d.data.unique())
         idx = pd.DatetimeIndex(datas)
@@ -711,6 +733,14 @@ app.add_event_handler("startup", _inicio)
 
 
 # ------------------------------------------------------------------ API
+@app.middleware("http")
+async def sem_cache(req, call_next):         # pagina/JS/CSS novos aparecem logo depois de atualizar o arquivo
+    r = await call_next(req)
+    if not req.url.path.startswith("/api/"):
+        r.headers["Cache-Control"] = "no-cache"
+    return r
+
+
 @app.get("/api/inicial")
 def inicial():
     return {"status": PRE["status"], "log": PRE["log"][-8:], "erro": PRE["erro"]}

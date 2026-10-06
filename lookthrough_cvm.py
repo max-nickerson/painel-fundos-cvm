@@ -304,6 +304,8 @@ def lookthrough(nomes, meses, carga=None):
         folha["categoria"] = folha.TP_APLIC.where(~eh_cota, folha.ativo.map(fund_cat))
         folha["veiculo"] = folha.caminho.str.split(" > ").str[-1]
         folhas.append(folha)
+    if not folhas:                              # CVM sem nenhuma carteira desse CNPJ no periodo
+        return pd.DataFrame()
     df = pd.concat(folhas, ignore_index=True)
     df = df.rename(columns={"veic": "cnpj_veiculo", "TP_ATIVO": "tipo_ativo", "DT_VENC": "vencimento",
                             "DS_INDEXADOR_POSFX": "indexador", "PR_INDEXADOR_POSFX": "pct_indexador",

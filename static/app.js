@@ -13,7 +13,7 @@ const dataBR = (d) => (d ? d.slice(8, 10) + "/" + d.slice(5, 7) + "/" + d.slice(
 const semAcento = (t) => String(t).normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase();
 const espera = (ms) => new Promise((ok) => setTimeout(ok, ms));
 const st = { V: null, F: {}, aba: "carteira", fundo: null, mesCart: {}, ret: { de: null, ate: null }, cons: { sel: null, de: null, ate: null, ord: "ret", asc: false },
-  A: {}, cf: { fora: new Set(["Caixa"]), n: 15, q: "" }, rf: { fora: new Set(["Caixa"]), n: 15, q: "" } };
+  A: {}, cf: { fora: new Set(["Caixa", "Confidencial"]), n: 15, q: "" }, rf: { fora: new Set(["Caixa", "Confidencial"]), n: 15, q: "" } };
 
 // ------------------------------------------------------------------ tema e abas
 try { const t = localStorage.getItem("tema"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
@@ -170,19 +170,20 @@ async function carteira(el) {
     <div class="cartao"><h3>Ativos de ${mesBR(mes)}</h3><p class="sub">Maiores posições por % do PL · filtre por categoria ou busque por ativo, emissor, grupo econômico ou código</p>
       <div id="f_at"></div><div class="grade g-tabela" style="margin:12px 0 0"><div id="t_top"></div><div><h3>Maiores grupos econômicos</h3><p class="sub">% do PL nas categorias escolhidas</p><div id="g_grupos"></div></div></div></div>`;
 
+  const eixoX = { ...layout().xaxis, tickformat: "%m/%y", dtick: ms.length <= 12 ? "M1" : ms.length <= 36 ? "M3" : "M12" };
   const series = {};
   D.carteira.forEach((x, i) => x.cats.forEach((c) => { (series[c.categoria] ||= Array(D.carteira.length).fill(0))[i] = c.perc; }));
   const tops = categoriasPrincipais(series), cores = st.V.cat_cores;
   const agrup = tops.map((c, i) => ({ c, y: series[c], cor: cores[i % cores.length] }));
   agrup.push({ c: "Outros", y: ms.map((_, i) => Object.entries(series).filter(([c]) => !tops.includes(c)).reduce((s, [, y]) => s + (y[i] || 0), 0)), cor: "#9aa0a6" });
   plota($("#g_aloc"), agrup.map((a) => ({ x: ms.map((m) => m + "-15"), y: a.y, name: a.c, stackgroup: "a", line: { width: 0.5, color: css("--surface") },
-    fillcolor: a.cor, hovertemplate: "%{y:.1f}%" })), layout({ yaxis: { ticksuffix: "%", gridcolor: css("--line") } }), 360);
+    fillcolor: a.cor, hovertemplate: "%{y:.1f}%" })), layout({ xaxis: eixoX, yaxis: { ticksuffix: "%", gridcolor: css("--line") } }), 360);
   const sp = {};
   D.carteira.forEach((x, i) => x.cats.forEach((c) => { if (c.spread != null && c.perc > 0.05) (sp[c.categoria] ||= Array(D.carteira.length).fill(null))[i] = c.spread; }));
   const comSpread = tops.filter((c) => sp[c] && c !== "Caixa" && c !== "Títulos Públicos");
   plota($("#g_spread"), comSpread.map((c) => ({ x: ms.map((m) => m + "-15"), y: sp[c], name: c, mode: "lines", connectgaps: false,
     line: { color: cores[tops.indexOf(c) % cores.length], width: 2 }, hovertemplate: "%{y:.2f}%" })),
-    layout({ yaxis: { ticksuffix: "%", gridcolor: css("--line") } }), 360);
+    layout({ xaxis: eixoX, yaxis: { ticksuffix: "%", gridcolor: css("--line") } }), 360);
 
   $("#t_top").innerHTML = `<div class="vazio">Carregando ativos...</div>`;
   const k = f.id + mes;
