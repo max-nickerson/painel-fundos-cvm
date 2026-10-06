@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import painel as p                                   # usa as mesmas funcoes do painel (nao roda o painel)
 
 CASA = {"Caixa", "LF", "LFSN", "LFSC", "DEB", "DEBIN", "Bonds", "CRA", "CRI", "NC", "FIDC"}
-SEM_SPREAD = set(p.SEM_SPREAD)
+SEM_SPREAD = set(p.SEM_SPREAD) | {"Fundos offshore"}      # offshore sem preco utilizavel: nao se aplica (carteira nao e publica)
 LIM = {"soma_pl": 1.0, "estimado": 10.0, "resid_mes": 1.0, "resid_12m": 2.0, "fecho": 0.01}
 
 

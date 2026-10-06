@@ -31,29 +31,82 @@ import requests
 
 # ------------------------------------------------------------------ CONFIGURACAO (edite aqui)
 NOSSOS_FUNDOS = {               # nome curto: CNPJ (qualquer formato)
-    "DUAL": "34.803.938/0001-61",
-    "DUAL_GLOBAL": "62.917.953/0001-76",
-    "PRECISION_PM": "32.292.528/0001-78",
+    "GD MM": "14.416.823/0001-07",
+    "GD MM Flexprev": "40.209.105/0001-70",
+    "GD MM Ultra": "42.332.169/0001-99",
+    "Precision": "32.292.528/0001-78",
+    "Dual": "34.803.938/0001-61",
+    "Prev": "49.803.664/0001-88",
+    "Dual Prev": "58.156.912/0001-37",
+    "Dual Global": "62.917.953/0001-76",
+    "Dual Prev Dist": "65.983.811/0001-03",
+    "Fuji": "67.269.289/0001-10",
+    "GD RF": "32.973.123/0001-03",
+    "Prev BB": "58.013.738/0001-73",
+    "GD RF Flexprev": "39.566.756/0001-38",
 }
-PEERS = {
-    "AZ_ALTRO": "22.100.009/0001-07", "SPARTA_TOP": "14.188.162/0001-00", "XP_CE120": "22.003.930/0001-31",
-    "CAPITANIA_P45": "20.146.294/0001-71", "KINEA_CP_PREV": "26.491.419/0001-87", "IBIUNA_CREDIT": "37.310.657/0001-65",
-    "DAYCOVAL_CLASSIC": "10.783.480/0001-68", "RIZA_LOTUS_PREV": "43.423.186/0001-02",
-    "BRADESCO_CP_PLUS": "32.387.924/0001-89", "MAPFRE_CONFIANZA": "51.253.495/0001-00", "CAIXA_MAXI": "17.322.725/0001-07",
-    "KINEA_RF_CP": "41.978.506/0001-57", "REGIA_EQUILIBRIO": "53.828.295/0001-55", "BNP_CREDITO_PLUS": "17.137.984/0001-50",
-    "OCCAM_LIQUIDEZ": "46.098.897/0001-39", "SANTANDER_INFRA_CDI": "51.672.063/0001-25", "BTG_CRED_CORP": "14.557.317/0001-38",
-    "XP_LIQUIDEZ": "51.488.342/0001-33", "SPX_SEAHAWK": "35.491.217/0001-26", "WESTERN_TOTAL_CREDIT": "28.320.756/0001-37",
-    "SULAMERICA_CRED_ATIVO": "13.823.084/0001-05", "SAFRA_VITESSE": "58.735.449/0001-88", "JGP_DEB_CDI": "58.600.298/0001-50",
-    "COMPASS_CREDIT": "35.399.404/0001-84", "SVN_RF_CP": "51.825.326/0001-99", "VINLAND_CORE": "56.415.717/0001-59",
-    "POLO_CRED_CORP": "56.974.598/0001-74", "ASA_ALM": "50.911.242/0001-05",
-    "SICOOB_INSTITUCIONAL": "14.702.111/0001-54", "ICATU_VANGUARDA": "64.203.379/0001-10", "SOMMA_QP": "24.249.979/0001-02",
-    "ANGA_CRED_ESTR": "23.034.819/0001-75", "MAG_ZONA_MATA": "41.594.651/0001-34", "LEGACY_COMPOUND": "50.891.130/0001-30",
-    "XP_AUGME_XPCE": "67.007.466/0001-90", "ARX_INFRA": "63.920.768/0001-01", "UBS_EVOLUTION": "56.049.361/0001-87",
-    "WRIGHT_CRED2": "53.179.441/0001-69", "VALORA_ABSOLUTE": "10.326.625/0001-00", "INTER_POLARIS": "64.156.687/0001-31",
-    "SICREDI_INFRA": "61.734.698/0001-63", "PLURAL_DEB_INC": "58.052.836/0001-10", "CAPITANIA_INFRA90": "52.248.139/0001-52",
-    "AUGME_MRT2": "27.347.344/0001-28", "V8_MERCURY": "58.398.452/0001-53", "A1_HIGH_GRADE": "57.815.131/0001-44",
-    "BANRISUL_CABERGS": "05.196.208/0001-41", "KILIMA_BANCOS": "49.272.086/0001-09", "PRINZ_LIQUIDEZ": "59.376.795/0001-80",
-    "TENAX_RFA": "53.293.548/0001-33", "DRYS_SHELTER": "52.282.978/0001-97", "JOURNEY_JCW": "57.594.567/0001-50",
+PEERS = {                       # se um CNPJ tambem estiver em NOSSOS_FUNDOS, vale como nosso
+    "XP Corporate Top Credito": "04.621.721/0001-70",
+    "Valora Absolute": "10.326.625/0001-00",
+    "XP Corporate Light": "11.046.179/0001-34",
+    "Principal Claritas": "11.447.136/0001-60",
+    "Sparta Top": "14.188.162/0001-00",
+    "Plural Credito Corporativo": "18.316.558/0001-46",
+    "Sparta Max": "26.773.148/0001-52",
+    "Itau Multimercado Credito Privado": "28.840.420/0001-03",
+    "AF Invest Geraes 30": "29.044.189/0001-04",
+    "JGP Corporate Plus": "32.892.264/0001-93",
+    "Dual Advanced": "34.803.938/0001-61",
+    "Compass Yield 30": "36.318.479/0001-56",
+    "Itau High Yield All": "42.263.927/0001-64",
+    "Icatu Vanguarda": "42.501.967/0001-05",
+    "ARX Vinson": "42.698.327/0001-29",
+    "Itau Sinfonia Multimercado": "42.717.960/0001-17",
+    "Occam Credito Corporativo": "47.586.648/0001-55",
+    "Absolute Creta Selecao": "48.094.354/0001-79",
+    "Mag High Grade Plus 30": "50.697.486/0001-37",
+    "Vinland Credito Selecao": "50.980.211/0001-06",
+    "Itau Sinfonia All": "54.278.393/0001-29",
+    "Solis Capital Antares": "13.054.728/0001-48",
+    "Capitania Premium 45": "20.146.294/0001-71",
+    "AZ Quest Altro": "22.100.009/0001-07",
+    "XP Corporate Plus": "23.999.611/0001-90",
+    "ARX Everest": "32.102.131/0001-76",
+    "Precision Advanced": "32.292.528/0001-78",
+    "JGP Select": "32.892.615/0001-66",
+    "AZ Quest Supra": "36.352.498/0001-07",
+    "Root Capital Credito HG": "42.405.028/0001-59",
+    "SPX Seahawk": "42.431.531/0001-89",
+    "AF Horizonte": "44.025.131/0001-07",
+    "Sparta Max 60": "44.643.192/0001-20",
+    "Absolute Atenas Itau": "49.645.368/0001-04",
+    "ARX RF": "41.575.611/0001-45",
+    "ARX K2 IVP Inflacao Curta": "46.997.356/0001-42",
+    "BTG Pactual Credito Corporativo": "42.827.247/0001-26",
+    "Capitania Itau": "41.709.507/0001-04",
+    "Capitania Idence Itau": "42.827.631/0001-29",
+    "Icatu Vanguarda Absoluto II": "47.212.476/0001-50",
+    "Icatu Vanguarda A": "34.781.249/0001-01",
+    "Itau Active Fix": "41.301.133/0001-85",
+    "Itau High Yield II": "42.860.483/0001-44",
+    "JGP Credito Itau": "41.955.494/0001-45",
+    "Kinea FI RF": "26.491.419/0001-87",
+    "Porto Credito RF": "54.974.029/0001-01",
+    "Schroder Idencia Itau I": "42.535.150/0001-40",
+    "Sparta Inflacao IU": "43.737.649/0001-00",
+    "Sparta IU": "46.997.384/0001-60",
+    "SPX Seahawk Itau": "42.014.260/0001-66",
+    "SulAmerica Cred ESG Itau": "45.615.787/0001-34",
+    "Vinland Credito A T1 MM": "49.456.416/0001-08",
+    "Absolute Delfos Itau": "49.645.692/0001-14",
+    "Capitania Reit Itau": "42.934.005/0001-31",
+    "Ibiuna I Credit Itau": "45.644.076/0001-98",
+    "Icatu Vanguarda A Qualificado": "41.867.248/0001-31",
+    "Itau BTG Pactual CorpPlus": "41.735.237/0001-06",
+    "Itau Flexprev Advanced": "49.803.664/0001-88",
+    "Itau Dual Prev": "58.156.912/0001-37",
+    "Itau Sinfonia MM": "42.380.882/0001-08",
+    "Vinland Credito IQ": "61.735.868/0001-24",
 }
 DESDE = "2019-01"               # primeiro mes de carteira/cota (CDA existe desde 2005; mais antigo = mais download na 1a vez)
 # grupo economico: a CVM so informa o emissor. Regra = trecho do nome do emissor (sem acento, maiusculo) -> grupo.
@@ -658,17 +711,28 @@ def cdi_mensal(desde, diario=False):
 
 
 def ipca_indice():
-    """Numero-indice do IPCA (IBGE/SIDRA), mensal. Usado no valor do contrato futuro DAP."""
+    """Numero-indice do IPCA, mensal (indice "AAAA-MM"). Fonte: IBGE/SIDRA; se vier vazio ou falhar, monta pela
+    variacao mensal do Banco Central (SGS 433) ancorada no numero-indice oficial de dez/2019 (5320,25)."""
     f = CACHE / "ipca_indice.json"
     if not f.exists() or f.stat().st_mtime < time.time() - 86400:
         try:
             r = requests.get("https://apisidra.ibge.gov.br/values/t/1737/n1/all/v/2266/p/all", timeout=120).json()
-            f.write_text(json.dumps({x["D3C"]: x["V"] for x in r[1:]}))
-        except (requests.RequestException, ValueError, KeyError):
-            if not f.exists():
-                return pd.Series(dtype=float)
-    d = json.loads(f.read_text())
-    s = pd.Series({f"{k[:4]}-{k[4:]}": float(v) for k, v in d.items() if v not in ("...", "-", "")})
+            d = {x["D3C"]: x["V"] for x in r[1:]}
+            if len(d) > 12:
+                f.write_text(json.dumps(d))
+        except (requests.RequestException, ValueError, KeyError, TypeError, IndexError):
+            pass
+    s = pd.Series(dtype=float, index=pd.Index([], dtype=object))
+    if f.exists():
+        d = json.loads(f.read_text())
+        s = pd.Series({f"{k[:4]}-{k[4:]}": float(v) for k, v in d.items() if v not in ("...", "-", "")}, dtype=float)
+    if len(s) < 12:
+        v = sgs(433, "1994-01") / 100
+        if len(v):
+            v.index = v.index.strftime("%Y-%m")
+            nivel = (1 + v).cumprod()
+            s = nivel / nivel.get("2019-12", nivel.iloc[-1]) * 5320.25
+    s.index = s.index.astype(object)
     return s.sort_index()
 
 
@@ -763,9 +827,9 @@ def distribuicoes(d):
         r = np.r_[0.0, q[1:] / q[:-1] - 1]
         base = pd.Series(r).rolling(21, min_periods=5, center=True).median().values
         cand = (r < -0.004) & (r < base - 0.004) & (g.data.dt.day.values <= 12)
-        meses_cand = pd.Series(g.mes.values[cand]).unique()
+        meses_cand = sorted(set(g.mes[cand].tolist()))
         if len(meses_cand) >= 6:
-            ini, fim = pd.Period(meses_cand.min()), pd.Period(meses_cand.max())
+            ini, fim = pd.Period(meses_cand[0]), pd.Period(meses_cand[-1])
             if len(meses_cand) >= 0.6 * ((fim - ini).n + 1):
                 info[n] = (int(cand.sum()), float(-np.mean(r[cand]) * 100))
                 r = np.where(cand, base, r)
@@ -898,6 +962,7 @@ import math
 import os
 import re
 import threading
+from contextlib import asynccontextmanager
 from datetime import date
 
 import numpy as np
@@ -906,13 +971,19 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 
-app = FastAPI(title="Painel de fundos")
+@asynccontextmanager
+async def _vida(_app):                       # partida do servidor (lifespan: vale para FastAPI/Starlette novos e antigos)
+    _inicio()
+    yield
+
+
+app = FastAPI(title="Painel de fundos", lifespan=_vida)
 
 CAT_CORES = ["#2a78d6", "#1baf7a", "#eda100", "#e87ba4", "#4a3aa7", "#008300", "#e34948", "#7ba7d9"]
 NOSSAS_CORES = ["#eb6834", "#c24f1d", "#f29a6b", "#a8401a", "#f5b38d"]
 GENERICO = (r"(?i)\b(FUNDO DE INVESTIMENTO|FUNDO|EM DIREITOS CREDIT[OÓ]RIOS|DE INVESTIMENTO|FIDC|FIC|FI|COTAS|MULTIMERCADO|"
             r"RENDA FIXA|CR[EÉ]DITO PRIVADO|RESPONSABILIDADE LIMITADA|RESP LTDA|N[AÃ]O PADRONIZADO|NP|LONGO PRAZO|LP)\b")
-METODO = 20                                     # suba quando mudar o calculo -> refaz o cache do dia
+METODO = 27                                     # suba quando mudar o calculo -> refaz o cache do dia
 CAIXA = ("Caixa",)
 CAIXA_CVM = ("Disponibilidades", "Operações Compromissadas", "Valores a receber", "Valores a pagar", lt.AJUSTE)
 TIPO_CASA = {"CDB/ RDB": "CDB", "CDB Vinculado": "CDB", "DPGE": "DPGE", "FI Imobiliário": "FII", "FI Participações": "FIP",
@@ -922,13 +993,14 @@ CURTO_CVM = {"Depósitos a prazo e outros títulos de IF": "Outros títulos de I
              "Outros valores mobiliários registrados na CVM objeto de oferta pública": "Outros valores mobiliários",
              "Investimento no Exterior": "Exterior (outros)", "Títulos de Crédito Privado": "Crédito privado (outros)",
              "Cotas de Fundos": "Cotas de fundos"}
-SEM_SPREAD = ("Ações", "FII", "FIP", "ETF", "FIAGRO", "Confidencial")
+SEM_SPREAD = ("Ações", "FII", "FIP", "ETF", "Confidencial")
 MERCADO = ("ANBIMA", "SND + preço do fundo")            # renda variavel: spread e duration nao se aplicam
 FUNDOS = ("FIDC", "FII", "FIP", "ETF", "FIAGRO", "Cotas de fundos", "Fundos offshore")
 USD = ("Bonds", "Fundos offshore", "Exterior (outros)")
-TP = [("LFT", r"BRSTNCLF|FINANCEIRAS DO TESOURO|LFT"), ("NTN-B", r"BRSTNCNTB|SERIE B|NTN-B"),
-      ("NTN-F", r"BRSTNCNTF|SERIE F|NTN-F"), ("LTN", r"BRSTNCLTN|LETRAS DO TESOURO NACIONAL|LTN")]
+TP = [("LFT", r"BRSTNCLF|FINANCEIRAS DO TESOURO|\bLFT\b"), ("NTN-B", r"BRSTNCNTB|SERIE B|NTN-B"),
+      ("NTN-F", r"BRSTNCNTF|SERIE F|NTN-F"), ("LTN", r"BRSTNCLTN|LETRAS DO TESOURO NACIONAL|\bLTN\b")]
 MESES_COD = "FGHJKMNQUVXZ"
+CAPTURA = None                                  # auditoria: dict que recebe as linhas calculadas (None = desligado)
 PRE = {"status": "parado", "log": [], "erro": None, "pasta": None}
 
 
@@ -950,6 +1022,15 @@ def limpo(o):
         return None if pd.isna(o) else o
     except (TypeError, ValueError):
         return o
+
+
+def _txt(x):
+    """Texto como array numpy de objetos str (funciona com pandas 2 e 3/Arrow)."""
+    return np.array(["" if v is None or (isinstance(v, float) and v != v) else str(v) for v in x], dtype=object)
+
+
+def _tem(arr, sub):
+    return np.array([sub in v for v in arr], dtype=bool)
 
 
 def wavg(v, w):
@@ -1055,11 +1136,13 @@ class Contexto:
         seguido = pd.to_datetime(ser.mes) == (pd.to_datetime(g.mes.shift()) + pd.DateOffset(months=1))
         am_pc = (ser.amort / ser.qt).where(ser.qt > 0, 0).fillna(0)
         rt = ((ser.cota + am_pc) / ant - 1).where(seguido & (ant > 0), ser.rent / 100)
+        oficial = (ser.rent / 100).where(ser.rent != 0)   # oficial (X_3) tem prioridade; 0,00 = nao informado
+        rt = oficial.where(oficial.notna() & (oficial > -0.2) & (oficial < 0.1), rt)
         ser = ser.assign(cota_ant=ant.where(seguido), rt=rt)
         e = (1 + rt) / (1 + ser.mes.map(self.cdi_m)) - 1
         primeiro = g.cumcount() == 0                                         # 1o mes da serie e parcial
         ser = ser.assign(e=e.where(~primeiro & (e > -0.5) & (e < 0.2)))     # perda real conta; so descarta absurdo
-        ser["spread"] = ((1 + ser.groupby(["cnpj", "serie"]).e.transform(lambda x: x.rolling(6, min_periods=2).median())) ** 12 - 1) * 100
+        ser["spread"] = ((1 + ser.groupby(["cnpj", "serie"]).e.transform(lambda x: x.rolling(6, min_periods=3).median())) ** 12 - 1) * 100
         esp = ((1 + ser.esperado / 100) / (1 + ser.mes.map(self.cdi_m))) ** 12 * 100 - 100        # benchmark da serie (X_6)
         ruim = ~((ser.spread > -30) & (ser.spread < 40))                 # perda recorrente aparece; absurdo vira benchmark
         ser["spread"] = ser.spread.mask(ruim, esp.where((ser.esperado > 0) & (esp > -5) & (esp < 30)))
@@ -1138,7 +1221,7 @@ class Contexto:
         pela remuneracao - PU par do mes. Devolve o pagamento (R$) ou NaN quando o SND nao calcula o PU (nao padrao)."""
         c = self.snd.reindex(cods)
         p0, p1 = self.pu_par(p).reindex(cods).values.astype(float), self.pu_par(m).reindex(cods).values.astype(float)
-        idx, jur, pct = c.indice.fillna("").values.astype(str), c.juros.values.astype(float), c.pct.values.astype(float)
+        idx, jur, pct = _txt(c.indice), c.juros.values.astype(float), c.pct.values.astype(float)
         cdi = float(self.cdi_m.get(m, 0.0))
         i0, i1 = self.ipca[self.ipca.index <= p], self.ipca[self.ipca.index <= m]
         inf = float(i1.iloc[-1] / i0.iloc[-1] - 1) if len(i0) and len(i1) else 0.0
@@ -1209,6 +1292,15 @@ def casa(df, ctx):
     out = out.mask(c.eq("FIAGRO"), "FIAGRO").mask(t.str.startswith("Aç") | t.str.contains("subscri"), "Ações")
     out = out.mask(t.isin(["Bonds e Treasury", "Título da Dívida Externa"]), "Bonds")
     out = out.mask(t.eq("FIDC") | c.eq("FIDC"), "FIDC")
+    fiagro = a.str.contains(r"FIAGRO|CADEIAS PRODUTIVAS DO AGRO")                     # FIAGRO (inclusive de direitos creditorios)
+    out = out.mask(fiagro, "FIAGRO")
+    fundo = fundo | fiagro
+    ext = c.eq("Investimento no Exterior") & t.isin(["Outros", ""])                   # exterior sem tipo: bond com vencimento ou caixa
+    venc_ = pd.to_datetime(df.vencimento, errors="coerce")
+    out = out.mask(ext & venc_.notna(), "Bonds").mask(ext & venc_.isna() & a.str.contains(r"USD|BNY|CASH|CAIXA|MARGIN|CONTA"), "Caixa")
+    out = out.mask(c.str.contains("termo", case=False, na=False) & ~c.str.contains(lt.PASSIVO, na=False), "Ações")
+    acao = c.str.contains(r"Depository Receipt|BDR|recibo de dep|cedidos em empr|^Ações", case=False, na=False, regex=True)         | t.str.contains(r"BDR|Depository|recibo de dep", case=False, na=False, regex=True)
+    out = out.mask(acao & ~c.str.contains(lt.PASSIVO, na=False), "Ações")               # BDR, recibos, acoes emprestadas
     out = out.mask(~fundo & (t.str.contains("Nota Promiss|Nota Comercial") | a.str.match(r"NOTA COMERCIAL")), "NC")
     out = out.mask(~fundo & (t.str.contains("imobili.rios") | a.str.contains(r"\bCRI\b")), "CRI")
     out = out.mask(~fundo & (t.eq("CRA") | a.str.match(r"CRA\b")), "CRA")
@@ -1223,6 +1315,8 @@ def casa(df, ctx):
     out = out.mask(c.eq("Debêntures") & ~out.isin(["DEB", "DEBIN"]), "DEB")
     contabil = c.isin(CAIXA_CVM) | (c.str.contains(lt.PASSIVO, na=False) & ~df.derivativo)
     out = out.mask(contabil, "Caixa").mask(c.eq("Títulos Públicos"), "Títulos Públicos")
+    lft = c.eq("Títulos Públicos") & (df.codigo.fillna("").str.contains("BRSTNCLF") | a.str.contains(r"FINANCEIRAS DO TESOURO|\bLFT\b"))
+    out = out.mask(lft, "Caixa")                                                       # LFT: pos-fixado na Selic = caixa
     return out.mask(df.confidencial & ~df.derivativo, "Confidencial")       # CVM so informa o tipo, sem o ativo
 
 
@@ -1230,7 +1324,10 @@ def rotulo(g, venc, tp):
     """Nome curto 'codigo - mm/aaaa': debenture/acao pelo ticker, CRI/CRA pelo codigo, titulo publico pelo tipo,
     LF/CDB pelo tipo + grupo, fundos pelo nome sem palavras genericas."""
     a = g.ativo.fillna("")
-    cod = g.codigo.fillna("").str.strip()
+    cod = g.codigo.fillna("").str.strip().str.split("_").str[0]
+    cod = cod.where(~cod.str.fullmatch(r"\d+"), "")                                     # codigo so numerico nao identifica
+    lote = a.str.extract(r"^\w+?_[-\d.e]+_[-\d.e]+_\d+\s+(.*?)(?:\s+-\s+(?:KY|US|LU|IE|BR)[A-Z0-9]{9,}.*)?$")[0]
+    a = a.where(lote.isna(), lote.str.replace(r"\s+-\s+", " - ", regex=True).str.strip(" -"))      # offshore em "lotes" 
     fundo = g.casa.isin(FUNDOS)
     ticker = cod.str.fullmatch(r"[A-Z]{4}[A-Z0-9]{1,4}") & ~fundo
     cri = a.str.extract(r"\b(CR[AI]):([A-Z0-9]+)")
@@ -1240,9 +1337,11 @@ def rotulo(g, venc, tp):
                      [cod, tp.fillna(""), cri[0].fillna("") + " " + cri[1].fillna(""), isin.fillna(""), curto],
                      g.casa + " " + g.grupo.fillna("").str.slice(0, 26))
     cx = g.casa.eq("Caixa")
-    base = np.where(cx, np.where(g.categoria.eq("Operações Compromissadas"), "Compromissada " + tp.fillna(""), g.categoria), base)
+    base = np.where(cx & tp.isna(), np.where(g.categoria.eq("Operações Compromissadas"), "Compromissada", g.categoria), base)
+    base = np.where(cx & tp.notna() & g.categoria.eq("Operações Compromissadas"), "Compromissada " + tp.fillna(""), base)
     v = venc.dt.strftime("%m/%Y")
-    return pd.Series(base, index=g.index).str.strip() + np.where(v.notna() & ~fundo & ~cx, " - " + v.fillna(""), "")
+    return pd.Series(base, index=g.index).str.strip() + np.where(v.notna() & ~fundo & (~cx | (tp.notna() & ~g.categoria.eq("Operações Compromissadas"))),
+                                                                  " - " + v.fillna(""), "")
 
 
 def implicito(df, ctx):
@@ -1254,8 +1353,12 @@ def implicito(df, ctx):
     k = k[(k.qt > 0) & (k.qt_ant > 0) & (k.v_ant > 0)].copy()
     rp = (k.v / k.qt) / (k.v_ant / k.qt_ant) - 1
     usd = k.chave.map(df.drop_duplicates("chave").set_index("chave").casa).isin(USD)
-    e = (1 + rp) / (1 + k.mes.map(ctx.cdi_m)) - 1
-    e = e.where(~usd, (1 + rp) / ((1 + k.mes.map(ctx.fx_m).fillna(0)) * (1 + k.mes.map(ctx.ust_m).fillna(0))) - 1)
+    e_brl = (1 + rp) / (1 + k.mes.map(ctx.cdi_m)) - 1
+    e_usd = (1 + rp) / ((1 + k.mes.map(ctx.fx_m).fillna(0)) * (1 + k.mes.map(ctx.ust_m).fillna(0))) - 1
+    # ativo em dolar com hedge (cota em reais): a serie em reais e a mais estavel; sem hedge, a em dolar
+    vol = pd.DataFrame({"c": k.chave, "b": e_brl, "u": e_usd}).groupby("c")[["b", "u"]].std()
+    em_usd = k.chave.map(vol.u < vol.b).fillna(True).astype(bool)
+    e = e_brl.where(~(usd & em_usd), e_usd)
     k["e"] = e.where(e.abs() < 0.2)
     k = k.sort_values(["chave", "mes"])
     k["med"] = k.groupby("chave").e.transform(lambda s: s.rolling(6, min_periods=1).median())
@@ -1276,8 +1379,8 @@ def mede(g, m, ctx, recentes, impl, ant=None):
     anos = ((venc - fm).dt.days / 365.25).clip(lower=1 / 365).values
     tem_venc = venc.notna().values
     pu_f = ctx.corrige(m, cod, (g.valor_veiculo / g.quantidade).where(g.quantidade > 0).values)
-    ca = g.casa.values.astype(str)
-    nome = g.ativo.fillna("").map(lt._sem_acento).values.astype(str)
+    ca = _txt(g.casa)
+    nome = _txt(g.ativo.fillna("").map(lt._sem_acento))
     curva = lambda t, a: lt.curva(ctx.curvas, t, fm, np.nan_to_num(a, nan=3))
     valido = lambda v: np.isfinite(v) & (v > -5) & (v < 30)          # spread fora disso = dado ruim: tenta a proxima fonte
 
@@ -1287,8 +1390,8 @@ def mede(g, m, ctx, recentes, impl, ant=None):
         sp[msk], du[msk], fonte[msk], ind[msk] = b(s)[msk], b(d)[msk], b(f)[msk], b(i)[msk]
 
     # 1) caixa e titulos publicos
-    poe((ca == "Caixa") | ((ca == "ETF") & (np.char.find(nome, "SELIC") >= 0)), 0.0, 0.0, "caixa", "DI")
-    tp = g.tp.values.astype(str)
+    poe((ca == "Caixa") | ((ca == "ETF") & _tem(nome, "SELIC")), 0.0, 0.0, "caixa", "DI")
+    tp = _txt(g.tp)
     m_tp = ca == "Títulos Públicos"
     if m_tp.any():
         y = np.where(tp == "NTN-B", curva("IPCA", anos), curva("PRE", anos))
@@ -1300,14 +1403,14 @@ def mede(g, m, ctx, recentes, impl, ant=None):
     deb = np.isin(ca, ["DEB", "DEBIN"])
     if an is not None and deb.any():
         a = an.reindex(cod)
-        tx, tipo, dur = a.taxa_ind.values.astype(float), a.tipo.values.astype(str), a.duration_anos.values.astype(float)
+        tx, tipo, dur = a.taxa_ind.values.astype(float), _txt(a.tipo), a.duration_anos.values.astype(float)
         real = np.isin(tipo, ["IPCA +", "IGP-M +"])
         s = np.where(tipo == "DI +", tx, np.where(tipo == "% do DI", (tx - 100) / 100 * cdi, np.nan))
         s = np.where(real, tx - lt.curva(ctx.curvas, "IPCA", pd.Timestamp(dia), np.nan_to_num(dur, nan=3)), s)
         s = np.where(tipo == "Outros", tx - lt.curva(ctx.curvas, "PRE", pd.Timestamp(dia), np.nan_to_num(dur, nan=2)), s)
         poe(deb & np.isfinite(s), s, dur, "ANBIMA", np.where(real, "IPCA", np.where(tipo == "Outros", "PRE", "DI")).astype(object))
     # 3) debentures fora da ANBIMA: taxa de emissao (SND) ajustada pelo preco do fundo / PU par do SND
-    idx = snd.indice.fillna("").values.astype(str)
+    idx = _txt(snd.indice)
     di, real, pre = idx == "DI", np.isin(idx, ["IPCA", "IGP-M", "INPC"]), idx == "PRE"
     m3 = deb & np.isnan(sp) & (di | real | pre) & tem_venc
     if m3.any():
@@ -1327,12 +1430,14 @@ def mede(g, m, ctx, recentes, impl, ant=None):
         poe(m3 & valido(spr), spr, d, np.where(np.isfinite(pp_), "SND + preço do fundo", "SND (taxa de emissão)").astype(object),
             np.where(di, "DI", np.where(real, "IPCA", "PRE")).astype(object))
     # 4) taxa contratada informada a CVM (LF, CDB, CRA, NC, debenture sem codigo...)
-    ix = g.indexador.fillna("").values.astype(str)
+    ix = _txt(g.indexador)
     cup = g.cupom.values.astype(float)
     cup = np.where(np.nan_to_num(cup) != 0, cup, np.nan)
     pct_i, tpre = g.pct_indexador.values.astype(float), g.taxa_pre.values.astype(float)
-    i_di = (np.char.find(ix, "DI de um dia") >= 0) | (np.char.find(ix, "Selic") >= 0)
-    i_ip, i_pr = np.char.find(ix, "IPCA") >= 0, np.char.find(ix, "prefixada") >= 0
+    i_di = _tem(ix, "DI de um dia") | _tem(ix, "Selic")
+    outros = (_tem(ix, "OUTROS") | _tem(ix, "Outros")) & np.isfinite(g.cupom.values.astype(float)) & (g.cupom.values.astype(float) > 0) & (g.cupom.values.astype(float) <= 5.5)
+    i_di = i_di | outros                                   # indexador "outros" com cupom baixo (ate 5,5): CDI + cupom
+    i_ip, i_pr = _tem(ix, "IPCA"), _tem(ix, "prefixada")
     m4 = np.isnan(sp) & (i_di | i_ip | i_pr) & ~np.isin(ca, SEM_SPREAD) & tem_venc
     if m4.any():
         cup_di = np.where(cup >= 50, (cup - 100) / 100 * cdi, cup)                  # % do CDI informado no campo de cupom
@@ -1342,7 +1447,7 @@ def mede(g, m, ctx, recentes, impl, ant=None):
         spr = np.where(i_di, taxa, np.where(i_ip, taxa - curva("IPCA", d), taxa - curva("PRE", d)))
         poe(m4 & valido(spr), spr, d, "taxa contratada (CVM)", np.where(i_di, "DI", np.where(i_ip, "IPCA", "PRE")).astype(object))
     # 5) sem taxa publica: implicito pelo preco (cotas de FIDC, CRI sem taxa, bonds, outros)
-    fid = ca == "FIDC"
+    fid = np.isin(ca, ["FIDC", "FIAGRO"])                 # FIAGRO de direitos creditorios tambem entrega o informe de FIDC
     d_fidc = np.full(n, np.nan)
     d_fidc[fid] = [ctx.fidc_anos(c, m) for c in cod[fid]]
     m_f = fid & np.isnan(sp)
@@ -1363,16 +1468,18 @@ def mede(g, m, ctx, recentes, impl, ant=None):
         zero = np.isin(ca, ["LF", "LFSN", "CDB", "DPGE", "LCA", "NC", "CCB", "LCI/LH"])
         _, d_g = taxa_e_duration(anos, np.where(zero, anos + 1, 0.5), 0, 0, cdi, np.nan_to_num(v), np.nan)
         d = np.where(np.isnan(d) & tem_venc, d_g, d)
-        poe(m5 & valido(v), v, d, np.where(usd, "implícito (preço em US$)", np.where(fid & np.isfinite(d), "implícito (cota) + prazo FIDC",
+        poe(m5 & valido(v) & (v > -2) & ~(np.isin(ca, USD) & (v > 12)), v, d, np.where(usd, "implícito (preço em US$)", np.where(fid & np.isfinite(d), "implícito (cota) + prazo FIDC",
                                                                                         "implícito (preço)")).astype(object),
             np.where(usd, "USD", "DI").astype(object))
-    # 6) renda variavel: nao se aplica
-    na = np.isin(ca, SEM_SPREAD) & np.isnan(sp)
-    fonte[na] = np.where(ca[na] == "Confidencial", "confidencial (CVM)", "não se aplica")
+    # 6) renda variavel: nao se aplica; fundo offshore sem preco utilizavel: carteira nao e publica
+    off = (ca == "Fundos offshore") & np.isnan(sp)
+    na = (np.isin(ca, SEM_SPREAD) & np.isnan(sp)) | off
+    fonte[na] = np.where(ca[na] == "Confidencial", "confidencial (CVM)",
+                         np.where(off[na], "não se aplica (fundo offshore: carteira não é pública)", "não se aplica"))
     # 7) o que faltar: mesmo emissor (neste fundo ou em outro fundo no mes); senao media da categoria; senao do fundo
     w = g.perc_pl.values.astype(float)
-    gr = g.grupo.fillna("").values.astype(str)
-    ok = np.isfinite(sp) & np.isfinite(du) & ~na & (w > 0) & ~np.isin(ca, ["Caixa", "Títulos Públicos"])         & ~np.char.startswith(fonte.astype(str), "estimado")
+    gr = _txt(g.grupo)
+    ok = np.isfinite(sp) & np.isfinite(du) & ~na & (w > 0) & ~np.isin(ca, ["Caixa", "Títulos Públicos"])         & ~np.array([str(f).startswith("estimado") for f in fonte], dtype=bool)
     for nome_g in np.unique(gr[ok]):                                    # alimenta o mapa de emissores do mes
         x = ok & (gr == nome_g)
         a = ctx.emissores.setdefault((m, nome_g), [0.0, 0.0, 0.0])
@@ -1388,9 +1495,13 @@ def mede(g, m, ctx, recentes, impl, ant=None):
     if falta_s.any() or falta_d.any():
         cred = ~np.isin(ca, ["Caixa", "Títulos Públicos"]) & ~na & (w > 0)
 
-        def media(v, msk):
+        def media(v, msk):                         # mediana ponderada: um ativo em default nao contamina a estimativa
             ok = msk & np.isfinite(v) & (w > 0)
-            return float(np.average(v[ok], weights=w[ok])) if ok.any() else np.nan
+            if not ok.any():
+                return np.nan
+            o = np.argsort(v[ok])
+            acum = np.cumsum(w[ok][o])
+            return float(v[ok][o][np.searchsorted(acum, acum[-1] / 2)])
         for c in np.unique(ca[falta_s | falta_d]):
             mc = ca == c
             for v, falta, rotulo_ in ((sp, falta_s, None), (du, falta_d, " · duration estimada")):
@@ -1398,8 +1509,10 @@ def mede(g, m, ctx, recentes, impl, ant=None):
                 if not sel.any():
                     continue
                 x, orig = media(v, mc & ~falta), "estimado (média da categoria)"
-                if np.isnan(x):
+                if np.isnan(x) or (v is sp and x < -2):          # nao espalha perda de outro ativo para quem nao tem dado
                     x, orig = media(v, cred & ~falta), "estimado (média do fundo)"
+                if v is sp and np.isfinite(x) and x < -2:
+                    x = np.nan
                 if np.isnan(x) and ant:                  # FIC sem a carteira do fundo investido no mes
                     x, orig = ant[0 if v is sp else 1], "estimado (carteira do mês anterior)"
                 v[sel] = x
@@ -1481,7 +1594,7 @@ def detalhe(nome, cnpj, df, ctx, pl, rent):
     nd = df[~df.derivativo]
     falta = (100 - nd.groupby("mes").perc_pl.sum()).loc[lambda x: x.abs() > 0.05]
     if len(falta):
-        conf = nd[nd.confidencial].groupby("mes").perc_pl.sum().reindex(falta.index).fillna(0) >= 5
+        conf = (nd[nd.confidencial].groupby("mes").perc_pl.sum().reindex(falta.index).fillna(0) >= 5) & (falta.values > 0)   # negativo = ajuste
         df = pd.concat([df, pd.DataFrame({"fundo": nome, "mes": falta.index, "categoria": lt.AJUSTE, "perc_pl": falta.values,
                                           "ativo": "Diferença entre PL e carteira informada (CVM)", "derivativo": False,
                                           "confidencial": conf.values, "chave": "ajuste|" + falta.index})], ignore_index=True)
@@ -1500,6 +1613,8 @@ def detalhe(nome, cnpj, df, ctx, pl, rent):
     df["grupo"] = [gmap[(k(e), c)] for e, c in zip(df.emissor, df.categoria)]
     curto = df.ativo.str.replace(GENERICO, " ", regex=True).str.replace(r"\s+", " ", regex=True).str.strip(" -").str.slice(0, 40)
     df["grupo"] = df.grupo.fillna(curto)
+    tick = df.ativo.fillna("").str.strip()
+    df["codigo"] = df.codigo.where(df.codigo.notna(), tick.where(tick.str.fullmatch(r"[A-Z]{4}[A-Z0-9]{1,4}")))
     df["casa"] = casa(df, ctx)
     df["venc"] = vencimento(df)
     df["tp"] = tipo_tp(df)
@@ -1512,6 +1627,8 @@ def detalhe(nome, cnpj, df, ctx, pl, rent):
     for m in meses:
         g = df[df.mes == m]
         e, dia = mede(g[~g.derivativo], m, ctx, recentes, impl, ant)
+        if CAPTURA is not None:
+            CAPTURA[(nome, m, "carteira")] = e.copy()
         ricos[m] = (e, g[g.derivativo])
         e["fin"] = e.perc_pl / 100 * pl_f[m] / 1e6
         cats = [{"categoria": c, "perc": x.perc_pl.sum(), "fin": x.fin.sum(), "spread": wavg(x.spread, x.perc_pl),
@@ -1608,12 +1725,16 @@ def detalhe(nome, cnpj, df, ctx, pl, rent):
             rf[fid] = [ctx.fidc_ret(c, m, pu) for c, pu in zip(w.codigo.fillna("").values[fid], w.pu.values[fid].astype(float))]
             r = r.mask(np.isfinite(rf) & (rf > -0.8) & (rf < 0.3), rf)          # retorno oficial da serie (cota + amortizacao)
         # renda variavel (acoes, FII, FIAGRO, ETF, FIP): preco de mercado sem filtro; FII/FIAGRO + dividendo estimado
+        usd_r = w.casa.isin(USD).values & np.isfinite(rp.values) & (rp.values > -0.1) & (rp.values < 0.1)   # > 10% no mes = erro de unidade
+        r = r.mask(usd_r, rp.values)                     # em dolar: preco real em reais; o futuro de dolar compensa o cambio
         rv = w.casa.isin(SEM_SPREAD).values & ~w.casa.eq("Confidencial").values & np.isfinite(rp.values)
         if rv.any():
             div = np.where(w.casa.isin(["FII", "FIAGRO"]).values, 0.75 * cdi_m, 0.0)
             r = r.mask(rv & (rp.values > -0.6) & (rp.values < 0.6), rp.values + div)
         cx = w.casa.isin(CAIXA)
         r[cx] = cdi_m
+        if CAPTURA is not None:
+            CAPTURA[(nome, m, "retorno")] = w.assign(r_=np.asarray(r, float), rp_=rp.values, pu0_=pu0, pu1_=pu1, esp_=esperado.values)
         ativo_c = w.perc_pl * r
         # 2) derivativos -> ativos protegidos
         ip = w[w.ipca & w.perc_pl.gt(0)]
@@ -1679,8 +1800,13 @@ def precarrega(log=None):
     escreve = log or PRE["log"].append
     PRE["status"] = "rodando"
     try:
-        fundos = [(n, lt.cnpj_of(x), True) for n, x in lt.NOSSOS_FUNDOS.items()] + \
-                 [(n, lt.cnpj_of(x), False) for n, x in lt.PEERS.items()]
+        fundos = [(n, lt.cnpj_of(x), True) for n, x in lt.NOSSOS_FUNDOS.items()]
+        vistos = {c for _, c, _ in fundos}
+        for n, x in lt.PEERS.items():                  # peer repetido ou que e nosso: entra uma vez so, como nosso
+            c = lt.cnpj_of(x)
+            if c not in vistos:
+                fundos.append((n, c, False))
+                vistos.add(c)
         dest = pasta_dia()
         chave = "|".join(sorted(c for _, c, _ in fundos)) + "|" + lt.DESDE + f"|m{METODO}"
         if (dest / "visao.json").exists() and json.loads((dest / "visao.json").read_text(encoding="utf-8")).get("chave") == chave:
@@ -1755,7 +1881,6 @@ def _inicio():                              # servidor (pasta/Docker): pre-carga
         threading.Thread(target=precarrega, daemon=True).start()
 
 
-app.add_event_handler("startup", _inicio)
 
 
 # ------------------------------------------------------------------ API
@@ -1952,6 +2077,14 @@ pre { text-align: left; white-space: pre-wrap; font: 12px/1.5 ui-monospace, Cons
   .kpi .v { font-size: 20px; }
 }
 
+/* metodologia */
+.metodo { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 10px 22px; margin-top: 10px; }
+.metodo b { font-size: 13px; }
+.metodo p { margin: 2px 0 0; font-size: 12.5px; color: var(--text-2); line-height: 1.45; }
+.marca-sel { display: inline-block; width: 16px; color: var(--accent); font-weight: 700; }
+.chip-t .ponto { margin-right: 5px; }
+#busca_cons .busca { width: min(340px, 100%); }
+
 </style>
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
 </head>
@@ -1995,7 +2128,7 @@ const dataBR = (d) => (d ? d.slice(8, 10) + "/" + d.slice(5, 7) + "/" + d.slice(
 const semAcento = (t) => String(t).normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase();
 const espera = (ms) => new Promise((ok) => setTimeout(ok, ms));
 const st = { V: null, F: {}, aba: "carteira", fundo: null, mesCart: {}, ret: { de: null, ate: null }, cons: { sel: null, de: null, ate: null, ord: "ret", asc: false },
-  A: {}, cf: { fora: new Set(["Caixa", "Confidencial"]), n: 15, q: "" }, rf: { fora: new Set(["Caixa", "Confidencial"]), n: 15, q: "" } };
+  A: {}, gf: { fora: new Set(), de: null, ate: null, fundo: null }, cf: { fora: new Set(["Caixa", "Confidencial"]), n: 15, q: "" }, rf: { fora: new Set(["Caixa", "Confidencial"]), n: 15, q: "" } };
 
 // ------------------------------------------------------------------ tema e abas
 try { const t = localStorage.getItem("tema"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
@@ -2035,22 +2168,44 @@ async function detalhe(id) {
 }
 const fundoPor = (id) => st.V.fundos.find((f) => f.id === id);
 
-// ------------------------------------------------------------------ busca de fundo (digitando)
-function campoBusca(onPick, placeholder = "Digite o nome ou CNPJ do fundo...", soComCarteira = false) {
+// ------------------------------------------------------------------ busca de fundo (digitando, sugestoes estilo Google)
+function pontua(q, f) {
+  // quanto o fundo combina com o que foi digitado: comeco do nome > comeco de palavra > trecho > palavras > parecido (erros de digitacao)
+  const n = semAcento(f.nome), qq = semAcento(q).trim(), dig = q.replace(/\D/g, "");
+  if (!qq) return 1;
+  if (dig.length > 2 && f.id.includes(dig)) return 100;
+  if (n.startsWith(qq)) return 95;
+  const pal = n.split(/[\s_\-.]+/);
+  if (pal.some((p) => p.startsWith(qq))) return 85;
+  if (n.includes(qq)) return 75;
+  const toks = qq.split(/\s+/).filter(Boolean);
+  if (toks.every((t) => pal.some((p) => p.startsWith(t)))) return 65;
+  const big = (s) => { const b = new Set(); for (let i = 0; i < s.length - 1; i++) b.add(s.slice(i, i + 2)); return b; };
+  const a = big(qq.replace(/\s+/g, "")), b = big(n.replace(/\s+/g, ""));
+  let c = 0; a.forEach((x) => b.has(x) && c++);
+  const dice = (2 * c) / Math.max(a.size + b.size, 1);
+  return dice >= 0.3 ? 50 * dice : 0;
+}
+function campoBusca(onPick, placeholder = "Digite o nome ou CNPJ do fundo...", soComCarteira = false, marcado = null) {
+  // marcado(id) -> true/false: modo selecao multipla (mostra ✓ e nao fecha ao escolher)
   const wrap = document.createElement("div");
   wrap.className = "busca";
   wrap.innerHTML = `<input type="search" placeholder="${placeholder}" autocomplete="off"><ul class="sugestoes" hidden></ul>`;
   const inp = $("input", wrap), ul = $("ul", wrap);
   let sel = 0, lista = [];
   const filtra = () => {
-    const q = semAcento(inp.value.trim()), dig = inp.value.replace(/\D/g, "");
-    lista = st.V.fundos.filter((f) => (!soComCarteira || f.tem_carteira) && (!q || semAcento(f.nome).includes(q) || (dig.length > 2 && f.id.includes(dig))))
-      .sort((a, b) => b.nosso - a.nosso || a.nome.localeCompare(b.nome)).slice(0, 30);
+    lista = st.V.fundos.filter((f) => !soComCarteira || f.tem_carteira).map((f) => ({ f, p: pontua(inp.value, f) })).filter((x) => x.p > 0)
+      .sort((a, b) => b.p - a.p || b.f.nosso - a.f.nosso || a.f.nome.localeCompare(b.f.nome)).slice(0, 12).map((x) => x.f);
     sel = 0;
-    ul.innerHTML = lista.map((f, i) => `<li data-i="${i}" class="${i === 0 ? "ativo" : ""}"><span>${f.nosso ? '<span class="ponto" style="background:var(--nosso)"></span>' : ""}${esc(f.nome)}</span><small>${esc(f.cnpj)}</small></li>`).join("") || "<li>Nada encontrado</li>";
+    ul.innerHTML = lista.map((f, i) => `<li data-i="${i}" class="${i === 0 ? "ativo" : ""}"><span>${marcado ? `<span class="marca-sel">${marcado(f.id) ? "✓" : ""}</span>` : ""}${esc(f.nome)}${f.nosso ? ' <span class="tag">NOSSO</span>' : ""}</span><small>${esc(f.cnpj)}</small></li>`).join("") || "<li>Nada encontrado</li>";
     ul.hidden = false;
   };
-  const escolhe = (i) => { if (lista[i]) { ul.hidden = true; inp.value = ""; onPick(lista[i]); } };
+  const escolhe = (i) => {
+    if (!lista[i]) return;
+    if (!marcado) { ul.hidden = true; inp.value = ""; }
+    onPick(lista[i]);
+    if (marcado) filtra();
+  };
   inp.addEventListener("input", filtra);
   inp.addEventListener("focus", filtra);
   inp.addEventListener("keydown", (e) => {
@@ -2059,7 +2214,7 @@ function campoBusca(onPick, placeholder = "Digite o nome ou CNPJ do fundo...", s
       ul.querySelectorAll("li").forEach((x, i) => x.classList.toggle("ativo", i === sel)); e.preventDefault();
     } else if (e.key === "Enter") { e.preventDefault(); escolhe(sel); } else if (e.key === "Escape") ul.hidden = true;
   });
-  ul.addEventListener("mousedown", (e) => { const li = e.target.closest("li[data-i]"); if (li) escolhe(+li.dataset.i); });
+  ul.addEventListener("mousedown", (e) => { const li = e.target.closest("li[data-i]"); if (li) { e.preventDefault(); escolhe(+li.dataset.i); } });
   inp.addEventListener("blur", () => setTimeout(() => (ul.hidden = true), 150));
   return wrap;
 }
@@ -2120,6 +2275,80 @@ const passa = (f, x) => !f.fora.has(x.categoria) && (!f.q.trim() || semAcento([x
 const corta = (arr, n) => (n ? arr.slice(0, n) : arr);
 const fonteCurta = (v) => `<span class="muted">${esc(v || "–")}</span>`;
 
+// ------------------------------------------------------------------ graficos da carteira: categorias liga/desliga + periodo
+function graficosCarteira(D, ms, aberto) {
+  const G = st.gf;
+  const iAb = ms.indexOf(aberto.mes);
+  if (!ms.includes(G.de) || G.fundo !== st.fundo) G.de = ms[0];
+  if (!ms.includes(G.ate) || G.fundo !== st.fundo) G.ate = ms[iAb >= 0 ? iAb : ms.length - 1];
+  G.fundo = st.fundo;
+  const peso = {};
+  D.carteira.forEach((x) => x.cats.forEach((c) => (peso[c.categoria] = (peso[c.categoria] || 0) + Math.abs(c.perc))));
+  const ordem = Object.keys(peso).sort((a, b) => peso[b] - peso[a]);
+  const pal = st.V.cat_cores.concat(["#7d5ba6", "#c2185b", "#00838f", "#8d6e63"]);
+  const cor = (c) => (ordem.indexOf(c) < pal.length ? pal[ordem.indexOf(c)] : "#9aa0a6");
+  const opt = (v) => ms.map((m) => `<option value="${m}" ${m === v ? "selected" : ""}>${mesBR(m)}${D.carteira.find((x) => x.mes === m).conf >= 5 ? " (confid.)" : ""}</option>`).join("");
+  $("#ctl_graf").innerHTML = `<label>De <select id="gde">${opt(G.de)}</select></label><label>até <select id="gate">${opt(G.ate)}</select></label>
+    <button class="botao" data-gp="aberto">Até a última aberta</button><button class="botao" data-gp="tudo">Tudo</button>`;
+  $("#f_graf").innerHTML = `<div class="chips">${ordem.map((c) => `<button class="chip-t" data-gc="${esc(c)}" aria-pressed="${!G.fora.has(c)}"><span class="ponto" style="background:${cor(c)}"></span>${esc(c)}</button>`).join("")}
+    <button class="chip-t mudo" data-gt="1">Todas</button><button class="chip-t mudo" data-gt="0">Nenhuma</button></div>`;
+  const marca = () => document.querySelectorAll("[data-gc]").forEach((x) => x.setAttribute("aria-pressed", !G.fora.has(x.dataset.gc)));
+  document.querySelectorAll("[data-gc]").forEach((b) => (b.onclick = () => { const c = b.dataset.gc; G.fora.has(c) ? G.fora.delete(c) : G.fora.add(c); marca(); desenhaG(); }));
+  document.querySelectorAll("[data-gt]").forEach((b) => (b.onclick = () => { G.fora = new Set(b.dataset.gt === "1" ? [] : ordem); marca(); desenhaG(); }));
+  $("#gde").onchange = (e) => { G.de = e.target.value; desenhaG(); };
+  $("#gate").onchange = (e) => { G.ate = e.target.value; desenhaG(); };
+  document.querySelectorAll("[data-gp]").forEach((b) => (b.onclick = () => {
+    G.de = ms[0]; G.ate = b.dataset.gp === "tudo" ? ms[ms.length - 1] : ms[iAb >= 0 ? iAb : ms.length - 1];
+    $("#gde").value = G.de; $("#gate").value = G.ate; desenhaG();
+  }));
+  function desenhaG() {
+    let a = ms.indexOf(G.de), b = ms.indexOf(G.ate);
+    if (a > b) [a, b] = [b, a];
+    const M = ms.slice(a, b + 1), X = M.map((m) => m + "-15");
+    const eixoX = { ...layout().xaxis, tickformat: "%m/%y", dtick: M.length <= 12 ? "M1" : M.length <= 36 ? "M3" : "M12" };
+    const cats = ordem.filter((c) => !G.fora.has(c));
+    const val = (c, k) => M.map((m) => { const x = D.carteira.find((y) => y.mes === m).cats.find((y) => y.categoria === c); return x ? x[k] : (k === "perc" ? 0 : null); });
+    plota($("#g_aloc"), cats.map((c) => ({ x: X, y: val(c, "perc"), name: c, stackgroup: "a", line: { width: 0.5, color: css("--surface") }, fillcolor: cor(c),
+      hovertemplate: `${esc(c)}: %{y:.1f}%<extra></extra>` })), layout({ xaxis: eixoX, yaxis: { ticksuffix: "%", gridcolor: css("--line") } }), 380);
+    const cs = cats.filter((c) => !["Caixa", "Confidencial"].includes(c) && !SEM_SPREAD.includes(c));
+    plota($("#g_spread"), cs.map((c) => ({ x: X, y: val(c, "spread").map((v, i) => (val(c, "perc")[i] > 0.05 ? v : null)), name: c, mode: "lines", connectgaps: false,
+      line: { color: cor(c), width: 2 }, hovertemplate: `${esc(c)}: %{y:.2f}%<extra></extra>` })),
+      layout({ xaxis: eixoX, yaxis: { ticksuffix: "%", gridcolor: css("--line") } }), 380);
+  }
+  desenhaG();
+}
+const SEM_SPREAD = ["Ações", "FII", "FIP", "ETF"];
+
+// ------------------------------------------------------------------ metodologia (com exemplos deste fundo)
+const METODO = [
+  ["caixa", "Caixa, compromissadas, LFT e provisões: spread 0 e duration 0 (rendem CDI/Selic)."],
+  ["ANBIMA", "Debêntures com taxa indicativa ANBIMA no fim do mês. DI+: spread = taxa. %DI: (x − 100%) × CDI. IPCA+ ou pré: taxa − curva do Tesouro (NTN-B ou prefixado) na mesma duration. Duration = a da ANBIMA."],
+  ["SND + preço do fundo", "Debêntures fora da ANBIMA: fluxo de juros/amortização e taxa de emissão do SND (debentures.com.br). Acha-se a taxa que leva o fluxo ao preço que o fundo informou à CVM (preço ÷ PU par) e converte-se em spread como acima. Duration = do fluxo nessa taxa. Testado contra a ANBIMA: erro mediano 0,01 pp (DI+) e 0,09 pp (IPCA+)."],
+  ["SND (taxa de emissão)", "Debênture sem preço confiável no mês: taxa de emissão do SND."],
+  ["taxa contratada (CVM)", "LF, CDB, CRA, NC e outros com taxa na carteira da CVM: spread pela taxa informada (DI+ direto; IPCA+/pré contra a curva do Tesouro). Duration: paga tudo no vencimento (LF, CDB, NC) = prazo; com cupom semestral nos demais."],
+  ["Tesouro (curva)", "NTN-B, LTN, NTN-F: spread 0 (são a própria curva); duration do fluxo com cupom semestral."],
+  ["FIDC: rentabilidade da série (CVM)", "Acha-se a série que o fundo tem (mesmo valor de cota) no informe mensal de FIDC da CVM. Spread = mediana de 6 meses da rentabilidade oficial acima do CDI (sênior/mezanino ≈ benchmark contratado; subordinada = retorno realizado, não há taxa fixa). Duration = prazo médio dos recebíveis do FIDC."],
+  ["implícito (preço)", "Sem taxa pública (CRI sem taxa, cotas de fundos): mediana de 6 meses da variação mensal do preço acima do CDI, anualizada."],
+  ["implícito (preço em US$)", "Bonds e fundos offshore: variação do preço em dólar (sem o câmbio) acima da Treasury americana do mesmo prazo — aproximação do cupom cambial (custo do hedge para CDI)."],
+  ["estimado (mesmo emissor)", "Sem dado do próprio ativo: média de outros papéis do mesmo grupo econômico no mês (neste ou em outros fundos)."],
+  ["estimado (média da categoria)", "Sem dado do ativo nem do emissor: média ponderada dos ativos da mesma categoria no fundo."],
+  ["estimado (média do fundo)", "Categoria inteira sem dado: média do crédito do fundo."],
+  ["estimado (carteira do mês anterior)", "Fundo investido ainda sem carteira na CVM no mês: usa o spread/duration do mês anterior."],
+  ["duration estimada", "Spread veio de uma fonte acima, mas o ativo não tem vencimento/fluxo: duration = média da categoria."],
+  ["não se aplica", "Ações, FII, FIP, ETF: renda variável, sem spread nem duration. Fundo offshore sem preço utilizável: a carteira lá fora não é pública (não se estima)."],
+  ["confidencial (CVM)", "Parte que a CVM ainda não divulgou (o fundo tem até 3 meses para abrir a carteira)."],
+];
+function metodologia(A) {
+  const ex = (chave) => {
+    const x = A.filter((a) => (a.fonte || "").includes(chave) && a.perc > 0).sort((a, b) => b.perc - a.perc)[0];
+    return x ? `<br><span class="muted">Neste fundo: ${esc(x.ativo)} — ${pct(x.perc)} do PL, spread ${num(x.spread)}, duration ${num(x.duration)}</span>` : "";
+  };
+  return `<h3>Como os números são calculados</h3>
+    <p class="sub">Spread CDI+ = quanto o ativo rende acima do CDI, em % a.a. (equivalente em CDI). Duration = prazo médio dos fluxos do ativo ponderado pelo valor presente (anos). Totais = médias ponderadas pelo % do PL. Cada ativo mostra a fonte na tabela acima; abaixo, o que cada fonte significa, em ordem de preferência.</p>
+    <div class="metodo">${METODO.map(([k, t]) => `<div><b>${esc(k)}</b><p>${t}${ex(k)}</p></div>`).join("")}</div>
+    <p class="nota">Retorno (aba Retorno): cada ativo rende pelo preço + pagamentos do mês (debêntures pelo PU par do SND; FIDC pela rentabilidade oficial; títulos públicos com cupom), ou CDI + spread − duration × variação da curva quando o preço não é confiável; futuros DI1/DAP/dólar vão para os ativos que protegem; taxas de administração e performance (CVM) em linha própria; o que sobra (negociação no mês, swaps) é distribuído pelo peso. A soma fecha com o retorno da cota.</p>`;
+}
+
 // ------------------------------------------------------------------ CARTEIRA
 async function carteira(el) {
   const f = fundoPor(st.fundo);
@@ -2147,25 +2376,15 @@ async function carteira(el) {
   const conf = C.conf >= 0.5 ? ` · ${pct(C.conf, 1)} do PL ainda confidencial` : "";
   const fontes = Object.entries(C.fontes || {}).filter(([, v]) => v >= 0.1).map(([k, v]) => `${esc(k)} ${pct(v, 1)}`).join(" · ");
   $("#corpo").innerHTML = cartao(`Carteira de ${mesBR(mes)} por categoria`, `PL R$ ${num(C.pl_mm, 2)} mm · look-through (cotas de fundos abertas até o ativo)${conf}`, tab +
-    `<p class="nota">Spread CDI+ = equivalente em CDI (IPCA+ e prefixados contra a curva do Tesouro de mesma duration). Cobertura de 100% dos ativos de crédito; ações, FII, FIP, ETF e FIAGRO não têm spread. Fonte, em % do PL: ${fontes}.</p>`) +
-    `<div class="grade g2">${cartao("% do PL por categoria", "Evolução mensal", '<div id="g_aloc"></div>')}${cartao("Spread CDI+ por categoria", "Média ponderada no mês, % a.a.", '<div id="g_spread"></div>')}</div>
+    `<p class="nota">Spread CDI+ = equivalente em CDI (IPCA+ e prefixados contra a curva do Tesouro de mesma duration). Cobertura de 100% dos ativos de crédito; ações, FII, FIP e ETF não têm spread. Como cada número é calculado: no fim da página. Fonte, em % do PL: ${fontes}.</p>`) +
+    `<div class="cartao"><div class="cab" style="margin-bottom:8px"><div><h3>Evolução por categoria</h3><p class="sub">Ligue/desligue categorias e escolha o período (padrão: do início até a última carteira aberta)</p></div><div class="controles" id="ctl_graf"></div></div>
+      <div id="f_graf"></div><div class="grade g2" style="margin:12px 0 0"><div><h3>% do PL por categoria</h3><div id="g_aloc"></div></div><div><h3>Spread CDI+ por categoria</h3><p class="sub">% a.a., média ponderada</p><div id="g_spread"></div></div></div></div>
     <div class="cartao"><h3>Ativos de ${mesBR(mes)}</h3><p class="sub">Maiores posições por % do PL · filtre por categoria ou busque por ativo, emissor, grupo econômico ou código</p>
-      <div id="f_at"></div><div class="grade g-tabela" style="margin:12px 0 0"><div id="t_top"></div><div><h3>Maiores grupos econômicos</h3><p class="sub">% do PL nas categorias escolhidas</p><div id="g_grupos"></div></div></div></div>`;
+      <div id="f_at"></div><div class="grade g-tabela" style="margin:12px 0 0"><div id="t_top"></div><div><h3>Maiores grupos econômicos</h3><p class="sub">% do PL nas categorias escolhidas</p><div id="g_grupos"></div></div></div></div>
+    <div class="cartao" id="metodo"></div>`;
 
-  const eixoX = { ...layout().xaxis, tickformat: "%m/%y", dtick: ms.length <= 12 ? "M1" : ms.length <= 36 ? "M3" : "M12" };
-  const series = {};
-  D.carteira.forEach((x, i) => x.cats.forEach((c) => { (series[c.categoria] ||= Array(D.carteira.length).fill(0))[i] = c.perc; }));
-  const tops = categoriasPrincipais(series), cores = st.V.cat_cores;
-  const agrup = tops.map((c, i) => ({ c, y: series[c], cor: cores[i % cores.length] }));
-  agrup.push({ c: "Outros", y: ms.map((_, i) => Object.entries(series).filter(([c]) => !tops.includes(c)).reduce((s, [, y]) => s + (y[i] || 0), 0)), cor: "#9aa0a6" });
-  plota($("#g_aloc"), agrup.map((a) => ({ x: ms.map((m) => m + "-15"), y: a.y, name: a.c, stackgroup: "a", line: { width: 0.5, color: css("--surface") },
-    fillcolor: a.cor, hovertemplate: "%{y:.1f}%" })), layout({ xaxis: eixoX, yaxis: { ticksuffix: "%", gridcolor: css("--line") } }), 360);
-  const sp = {};
-  D.carteira.forEach((x, i) => x.cats.forEach((c) => { if (c.spread != null && c.perc > 0.05) (sp[c.categoria] ||= Array(D.carteira.length).fill(null))[i] = c.spread; }));
-  const comSpread = tops.filter((c) => sp[c] && c !== "Caixa" && c !== "Títulos Públicos");
-  plota($("#g_spread"), comSpread.map((c) => ({ x: ms.map((m) => m + "-15"), y: sp[c], name: c, mode: "lines", connectgaps: false,
-    line: { color: cores[tops.indexOf(c) % cores.length], width: 2 }, hovertemplate: "%{y:.2f}%" })),
-    layout({ xaxis: eixoX, yaxis: { ticksuffix: "%", gridcolor: css("--line") } }), 360);
+  graficosCarteira(D, ms, aberto);
+  const cores = st.V.cat_cores;
 
   $("#t_top").innerHTML = `<div class="vazio">Carregando ativos...</div>`;
   const k = f.id + mes;
@@ -2191,6 +2410,7 @@ async function carteira(el) {
   };
   filtros($("#f_at"), todas, st.cf, redesenha, "Buscar ativo, emissor, grupo ou código...");
   redesenha();
+  $("#metodo").innerHTML = metodologia(A);
 }
 
 // ------------------------------------------------------------------ RETORNO
@@ -2298,7 +2518,8 @@ function consolidado(el) {
     <div class="controles"><label>De <input type="date" id="cde" value="${C.de}" min="${V.datas[0]}" max="${ult}"></label><label>até <input type="date" id="cate" value="${C.ate}" min="${V.datas[0]}" max="${ult}"></label>
     ${[["12m", 12], ["24m", 24], ["No ano", "ano"], ["Tudo", "tudo"]].map(([t, n]) => `<button class="botao" data-q="${n}">${t}</button>`).join("")}</div></div>
     <div class="cartao"><div class="controles" style="margin-bottom:8px"><span class="sub" style="margin:0">Fundos:</span>
-      <button class="botao" data-s="todos">Todos</button><button class="botao" data-s="nossos">Nossos</button><button class="botao" data-s="peers">Peers</button><button class="botao" data-s="nenhum">Limpar</button></div>
+      <button class="botao" data-s="todos">Todos</button><button class="botao" data-s="nossos">Só os nossos</button><button class="botao" data-s="peers">Só peers</button><button class="botao" data-s="nenhum">Limpar</button>
+      <div id="busca_cons"></div><span class="sub" id="n_sel" style="margin:0"></span></div>
       <div class="multi" id="multi"></div></div>
     <div id="cc"></div>`;
   $("#cde").onchange = (e) => { C.de = e.target.value; desenha(); };
@@ -2312,39 +2533,47 @@ function consolidado(el) {
   document.querySelectorAll("[data-s]").forEach((b) => (b.onclick = () => {
     const s = b.dataset.s;
     C.sel = new Set(V.fundos.filter((f) => s === "todos" || (s === "nossos" && f.nosso) || (s === "peers" && !f.nosso)).map((f) => f.id));
-    desenha();
+    atualiza();
   }));
-  const multi = $("#multi");
-  const chips = V.fundos.filter((f) => C.sel.has(f.id));
-  multi.innerHTML = (chips.length > 24 ? `<span class="chip">${chips.filter((f) => f.nosso).length} nossos + ${chips.filter((f) => !f.nosso).length} peers selecionados</span>`
-    : chips.map((f) => `<span class="chip ${f.nosso ? "nosso" : ""}">${esc(f.nome)}<button data-x="${f.id}" aria-label="Remover">×</button></span>`).join(""));
-  multi.querySelectorAll("[data-x]").forEach((b) => (b.onclick = () => { C.sel.delete(b.dataset.x); desenha(); }));
-  multi.appendChild(campoBusca((x) => { C.sel.add(x.id); desenha(); }, "Adicionar fundo: digite..."));
+  // busca com selecao multipla: digitar, clicar liga/desliga o fundo (✓) sem fechar a lista
+  $("#busca_cons").appendChild(campoBusca((x) => { C.sel.has(x.id) ? C.sel.delete(x.id) : C.sel.add(x.id); atualiza(); },
+    "Adicionar/remover fundo: digite...", false, (id) => C.sel.has(id)));
 
-  const [i0, i1] = indicesDatas(C.de, C.ate);
-  const linhas = [], fora = [];
-  V.fundos.filter((f) => C.sel.has(f.id)).forEach((f) => { const e = estatPeriodo(f, i0, i1); (e ? linhas : fora).push({ f, ...(e || {}) }); });
-  const cdiP = (V.cdi[i1] / V.cdi[i0] - 1) * 100;
-  const ord = C.ord, sgn = C.asc ? 1 : -1;
-  linhas.sort((x, y) => sgn * ((x[ord] ?? -1e9) - (y[ord] ?? -1e9)));
-  $("#cc").innerHTML = cartao("Retorno acumulado", `${dataBR(V.datas[i0 + 1] || V.datas[i0])} a ${dataBR(V.datas[i1])} · CDI ${pct(cdiP)} · laranja = nossos · cinza = peers`, '<div id="g_cons"></div>') +
-    cartao("Risco x retorno", "Mesmo período e mesmos fundos · laranja = nossos · cinza = peers", '<div id="g_rr"></div>') +
-    cartao("Ranking no período", fora.length ? `${fora.length} fundo(s) selecionado(s) fora por não existirem no período inteiro: ${fora.map((x) => esc(x.f.nome)).join(", ")}` : "Clique no título da coluna para ordenar",
-      tabela([{ t: "#", k: "_i" }, { t: "Fundo", k: "nome", w: 1, f: (v, r) => `${r.f.nosso ? '<span class="ponto" style="background:var(--nosso)"></span>' : '<span class="ponto" style="background:#9aa0a6"></span>'}${esc(r.f.nome)}${r.f.distribui ? ' <span class="muted" title="Distribui rendimentos: retorno total, somando as distribuições">· distribui</span>' : ""}` },
-        { t: "Retorno", k: "ret", n: 1, ord: "ret", f: (v) => `<span class="${cls(v)}">${pct(v)}</span>` }, { t: "% do CDI", k: "pcdi", n: 1, ord: "pcdi", f: (v) => pct(v, 1) },
-        { t: "Vol. anual", k: "vol", n: 1, ord: "vol", f: (v) => pct(v) }, { t: "Pior drawdown", k: "dd", n: 1, ord: "dd", f: (v) => pct(v) },
-        { t: "PL (R$ mm)", k: "pl", n: 1, ord: "pl", f: (v) => num(v, 0) }],
-        linhas.map((r, i) => ({ ...r, _i: i + 1, nome: r.f.nome, pl: r.f.pl, _cls: r.f.nosso ? "nosso" : "" }))));
-  document.querySelectorAll("th[data-ord]").forEach((th) => (th.onclick = () => { if (C.ord === th.dataset.ord) C.asc = !C.asc; else { C.ord = th.dataset.ord; C.asc = false; } desenha(); }));
-  const xs = V.datas.slice(i0, i1 + 1);
-  const serie = (f) => { const c = f.cota.slice(i0, i1 + 1); let b = c.find((v) => v != null); return c.map((v) => (v == null ? null : (v / b - 1) * 100)); };
-  const dados = linhas.filter((r) => !r.f.nosso).map((r) => ({ x: xs, y: serie(r.f), name: r.f.nome, mode: "lines", line: { color: "#9aa0a6", width: 1.2 }, opacity: 0.55, showlegend: false,
-    hovertemplate: `${esc(r.f.nome)}: %{y:.2f}%<extra></extra>` }));
-  linhas.filter((r) => r.f.nosso).forEach((r) => dados.push({ x: xs, y: serie(r.f), name: r.f.nome, mode: "lines", line: { color: r.f.cor, width: 2.8 }, hovertemplate: `${esc(r.f.nome)}: %{y:.2f}%<extra></extra>` }));
-  const c0 = V.cdi[i0];
-  dados.push({ x: xs, y: V.cdi.slice(i0, i1 + 1).map((v) => (v / c0 - 1) * 100), name: "CDI", mode: "lines", line: { color: css("--text-1"), width: 2, dash: "dash" }, hovertemplate: "CDI: %{y:.2f}%<extra></extra>" });
-  plota($("#g_cons"), dados, layout({ hovermode: "closest", yaxis: { ticksuffix: "%", gridcolor: css("--line") } }), 460);
-  riscoRetorno($("#g_rr"), linhas);
+  function atualiza() {
+    const chips = V.fundos.filter((f) => C.sel.has(f.id)).sort((a, b) => b.nosso - a.nosso || a.nome.localeCompare(b.nome));
+    $("#n_sel").textContent = `${chips.filter((f) => f.nosso).length} nossos + ${chips.filter((f) => !f.nosso).length} peers selecionados`;
+    $("#multi").innerHTML = chips.map((f) => `<span class="chip ${f.nosso ? "nosso" : ""}">${esc(f.nome)}<button data-x="${f.id}" aria-label="Remover">×</button></span>`).join("") || '<span class="sub">Nenhum fundo selecionado</span>';
+    $("#multi").querySelectorAll("[data-x]").forEach((b) => (b.onclick = () => { C.sel.delete(b.dataset.x); atualiza(); }));
+    resultados();
+  }
+
+  function resultados() {
+    const [i0, i1] = indicesDatas(C.de, C.ate);
+    const linhas = [], fora = [];
+    V.fundos.filter((f) => C.sel.has(f.id)).forEach((f) => { const e = estatPeriodo(f, i0, i1); (e ? linhas : fora).push({ f, ...(e || {}) }); });
+    const cdiP = (V.cdi[i1] / V.cdi[i0] - 1) * 100;
+    const ord = C.ord, sgn = C.asc ? 1 : -1;
+    linhas.sort((x, y) => sgn * ((x[ord] ?? -1e9) - (y[ord] ?? -1e9)));
+    $("#cc").innerHTML = cartao("Retorno acumulado", `${dataBR(V.datas[i0 + 1] || V.datas[i0])} a ${dataBR(V.datas[i1])} · CDI ${pct(cdiP)} · laranja = nossos · cinza = peers`, '<div id="g_cons"></div>') +
+      cartao("Risco x retorno", "Mesmo período e mesmos fundos · laranja = nossos · cinza = peers", '<div id="g_rr"></div>') +
+      cartao("Ranking no período", fora.length ? `${fora.length} fundo(s) selecionado(s) fora por não existirem no período inteiro: ${fora.map((x) => esc(x.f.nome)).join(", ")}` : "Clique no título da coluna para ordenar",
+        tabela([{ t: "#", k: "_i" }, { t: "Fundo", k: "nome", w: 1, f: (v, r) => `<span class="ponto" style="background:${r.f.nosso ? "var(--nosso)" : "#9aa0a6"}"></span>${esc(r.f.nome)}${r.f.nosso ? ' <span class="tag">NOSSO</span>' : ""}${r.f.distribui ? ' <span class="muted" title="Distribui rendimentos: retorno total, somando as distribuições">· distribui</span>' : ""}` },
+          { t: "Retorno", k: "ret", n: 1, ord: "ret", f: (v) => `<span class="${cls(v)}">${pct(v)}</span>` }, { t: "% do CDI", k: "pcdi", n: 1, ord: "pcdi", f: (v) => pct(v, 1) },
+          { t: "Vol. anual", k: "vol", n: 1, ord: "vol", f: (v) => pct(v) }, { t: "Pior drawdown", k: "dd", n: 1, ord: "dd", f: (v) => pct(v) },
+          { t: "PL (R$ mm)", k: "pl", n: 1, ord: "pl", f: (v) => num(v, 0) }],
+          linhas.map((r, i) => ({ ...r, _i: i + 1, nome: r.f.nome, pl: r.f.pl, _cls: r.f.nosso ? "nosso" : "" }))));
+    document.querySelectorAll("th[data-ord]").forEach((th) => (th.onclick = () => { if (C.ord === th.dataset.ord) C.asc = !C.asc; else { C.ord = th.dataset.ord; C.asc = false; } resultados(); }));
+    const xs = V.datas.slice(i0, i1 + 1);
+    const serie = (f) => { const c = f.cota.slice(i0, i1 + 1); const b = c.find((v) => v != null); return c.map((v) => (v == null ? null : (v / b - 1) * 100)); };
+    const dados = linhas.filter((r) => !r.f.nosso).map((r) => ({ x: xs, y: serie(r.f), name: r.f.nome, mode: "lines", line: { color: "#9aa0a6", width: 1.2 }, opacity: 0.55, showlegend: false,
+      hovertemplate: `${esc(r.f.nome)}: %{y:.2f}%<extra></extra>` }));
+    linhas.filter((r) => r.f.nosso).forEach((r) => dados.push({ x: xs, y: serie(r.f), name: r.f.nome, mode: "lines", line: { color: r.f.cor || "#eb6834", width: 2.6 }, hovertemplate: `${esc(r.f.nome)}: %{y:.2f}%<extra></extra>` }));
+    const c0 = V.cdi[i0];
+    dados.push({ x: xs, y: V.cdi.slice(i0, i1 + 1).map((v) => (v / c0 - 1) * 100), name: "CDI", mode: "lines", line: { color: css("--text-1"), width: 2, dash: "dash" }, hovertemplate: "CDI: %{y:.2f}%<extra></extra>" });
+    plota($("#g_cons"), dados, layout({ hovermode: "closest", yaxis: { ticksuffix: "%", gridcolor: css("--line") } }), 460);
+    riscoRetorno($("#g_rr"), linhas);
+  }
+  atualiza();
 }
 
 </script>
@@ -2377,7 +2606,7 @@ if __name__ == "__main__":                 # importante: os processos auxiliares
     else:
         import webbrowser
         import uvicorn
-        print(f"Preparando o painel: {len(NOSSOS_FUNDOS) + len(PEERS)} fundos desde {DESDE}. Na 1a vez pode levar bastante tempo...")
+        print(f"Preparando o painel: {len({cnpj_of(c) for c in list(NOSSOS_FUNDOS.values()) + list(PEERS.values())})} fundos desde {DESDE}. Na 1a vez pode levar bastante tempo...")
         precarrega(log=lambda m: print("  " + m, flush=True))
         if PRE["status"] != "ok":
             sys.exit("Nao foi possivel preparar o painel: " + str(PRE["erro"]))

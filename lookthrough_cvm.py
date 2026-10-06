@@ -21,29 +21,82 @@ import requests
 
 # ------------------------------------------------------------------ CONFIGURACAO (edite aqui)
 NOSSOS_FUNDOS = {               # nome curto: CNPJ (qualquer formato)
-    "DUAL": "34.803.938/0001-61",
-    "DUAL_GLOBAL": "62.917.953/0001-76",
-    "PRECISION_PM": "32.292.528/0001-78",
+    "GD MM": "14.416.823/0001-07",
+    "GD MM Flexprev": "40.209.105/0001-70",
+    "GD MM Ultra": "42.332.169/0001-99",
+    "Precision": "32.292.528/0001-78",
+    "Dual": "34.803.938/0001-61",
+    "Prev": "49.803.664/0001-88",
+    "Dual Prev": "58.156.912/0001-37",
+    "Dual Global": "62.917.953/0001-76",
+    "Dual Prev Dist": "65.983.811/0001-03",
+    "Fuji": "67.269.289/0001-10",
+    "GD RF": "32.973.123/0001-03",
+    "Prev BB": "58.013.738/0001-73",
+    "GD RF Flexprev": "39.566.756/0001-38",
 }
-PEERS = {
-    "AZ_ALTRO": "22.100.009/0001-07", "SPARTA_TOP": "14.188.162/0001-00", "XP_CE120": "22.003.930/0001-31",
-    "CAPITANIA_P45": "20.146.294/0001-71", "KINEA_CP_PREV": "26.491.419/0001-87", "IBIUNA_CREDIT": "37.310.657/0001-65",
-    "DAYCOVAL_CLASSIC": "10.783.480/0001-68", "RIZA_LOTUS_PREV": "43.423.186/0001-02",
-    "BRADESCO_CP_PLUS": "32.387.924/0001-89", "MAPFRE_CONFIANZA": "51.253.495/0001-00", "CAIXA_MAXI": "17.322.725/0001-07",
-    "KINEA_RF_CP": "41.978.506/0001-57", "REGIA_EQUILIBRIO": "53.828.295/0001-55", "BNP_CREDITO_PLUS": "17.137.984/0001-50",
-    "OCCAM_LIQUIDEZ": "46.098.897/0001-39", "SANTANDER_INFRA_CDI": "51.672.063/0001-25", "BTG_CRED_CORP": "14.557.317/0001-38",
-    "XP_LIQUIDEZ": "51.488.342/0001-33", "SPX_SEAHAWK": "35.491.217/0001-26", "WESTERN_TOTAL_CREDIT": "28.320.756/0001-37",
-    "SULAMERICA_CRED_ATIVO": "13.823.084/0001-05", "SAFRA_VITESSE": "58.735.449/0001-88", "JGP_DEB_CDI": "58.600.298/0001-50",
-    "COMPASS_CREDIT": "35.399.404/0001-84", "SVN_RF_CP": "51.825.326/0001-99", "VINLAND_CORE": "56.415.717/0001-59",
-    "POLO_CRED_CORP": "56.974.598/0001-74", "ASA_ALM": "50.911.242/0001-05",
-    "SICOOB_INSTITUCIONAL": "14.702.111/0001-54", "ICATU_VANGUARDA": "64.203.379/0001-10", "SOMMA_QP": "24.249.979/0001-02",
-    "ANGA_CRED_ESTR": "23.034.819/0001-75", "MAG_ZONA_MATA": "41.594.651/0001-34", "LEGACY_COMPOUND": "50.891.130/0001-30",
-    "XP_AUGME_XPCE": "67.007.466/0001-90", "ARX_INFRA": "63.920.768/0001-01", "UBS_EVOLUTION": "56.049.361/0001-87",
-    "WRIGHT_CRED2": "53.179.441/0001-69", "VALORA_ABSOLUTE": "10.326.625/0001-00", "INTER_POLARIS": "64.156.687/0001-31",
-    "SICREDI_INFRA": "61.734.698/0001-63", "PLURAL_DEB_INC": "58.052.836/0001-10", "CAPITANIA_INFRA90": "52.248.139/0001-52",
-    "AUGME_MRT2": "27.347.344/0001-28", "V8_MERCURY": "58.398.452/0001-53", "A1_HIGH_GRADE": "57.815.131/0001-44",
-    "BANRISUL_CABERGS": "05.196.208/0001-41", "KILIMA_BANCOS": "49.272.086/0001-09", "PRINZ_LIQUIDEZ": "59.376.795/0001-80",
-    "TENAX_RFA": "53.293.548/0001-33", "DRYS_SHELTER": "52.282.978/0001-97", "JOURNEY_JCW": "57.594.567/0001-50",
+PEERS = {                       # se um CNPJ tambem estiver em NOSSOS_FUNDOS, vale como nosso
+    "XP Corporate Top Credito": "04.621.721/0001-70",
+    "Valora Absolute": "10.326.625/0001-00",
+    "XP Corporate Light": "11.046.179/0001-34",
+    "Principal Claritas": "11.447.136/0001-60",
+    "Sparta Top": "14.188.162/0001-00",
+    "Plural Credito Corporativo": "18.316.558/0001-46",
+    "Sparta Max": "26.773.148/0001-52",
+    "Itau Multimercado Credito Privado": "28.840.420/0001-03",
+    "AF Invest Geraes 30": "29.044.189/0001-04",
+    "JGP Corporate Plus": "32.892.264/0001-93",
+    "Dual Advanced": "34.803.938/0001-61",
+    "Compass Yield 30": "36.318.479/0001-56",
+    "Itau High Yield All": "42.263.927/0001-64",
+    "Icatu Vanguarda": "42.501.967/0001-05",
+    "ARX Vinson": "42.698.327/0001-29",
+    "Itau Sinfonia Multimercado": "42.717.960/0001-17",
+    "Occam Credito Corporativo": "47.586.648/0001-55",
+    "Absolute Creta Selecao": "48.094.354/0001-79",
+    "Mag High Grade Plus 30": "50.697.486/0001-37",
+    "Vinland Credito Selecao": "50.980.211/0001-06",
+    "Itau Sinfonia All": "54.278.393/0001-29",
+    "Solis Capital Antares": "13.054.728/0001-48",
+    "Capitania Premium 45": "20.146.294/0001-71",
+    "AZ Quest Altro": "22.100.009/0001-07",
+    "XP Corporate Plus": "23.999.611/0001-90",
+    "ARX Everest": "32.102.131/0001-76",
+    "Precision Advanced": "32.292.528/0001-78",
+    "JGP Select": "32.892.615/0001-66",
+    "AZ Quest Supra": "36.352.498/0001-07",
+    "Root Capital Credito HG": "42.405.028/0001-59",
+    "SPX Seahawk": "42.431.531/0001-89",
+    "AF Horizonte": "44.025.131/0001-07",
+    "Sparta Max 60": "44.643.192/0001-20",
+    "Absolute Atenas Itau": "49.645.368/0001-04",
+    "ARX RF": "41.575.611/0001-45",
+    "ARX K2 IVP Inflacao Curta": "46.997.356/0001-42",
+    "BTG Pactual Credito Corporativo": "42.827.247/0001-26",
+    "Capitania Itau": "41.709.507/0001-04",
+    "Capitania Idence Itau": "42.827.631/0001-29",
+    "Icatu Vanguarda Absoluto II": "47.212.476/0001-50",
+    "Icatu Vanguarda A": "34.781.249/0001-01",
+    "Itau Active Fix": "41.301.133/0001-85",
+    "Itau High Yield II": "42.860.483/0001-44",
+    "JGP Credito Itau": "41.955.494/0001-45",
+    "Kinea FI RF": "26.491.419/0001-87",
+    "Porto Credito RF": "54.974.029/0001-01",
+    "Schroder Idencia Itau I": "42.535.150/0001-40",
+    "Sparta Inflacao IU": "43.737.649/0001-00",
+    "Sparta IU": "46.997.384/0001-60",
+    "SPX Seahawk Itau": "42.014.260/0001-66",
+    "SulAmerica Cred ESG Itau": "45.615.787/0001-34",
+    "Vinland Credito A T1 MM": "49.456.416/0001-08",
+    "Absolute Delfos Itau": "49.645.692/0001-14",
+    "Capitania Reit Itau": "42.934.005/0001-31",
+    "Ibiuna I Credit Itau": "45.644.076/0001-98",
+    "Icatu Vanguarda A Qualificado": "41.867.248/0001-31",
+    "Itau BTG Pactual CorpPlus": "41.735.237/0001-06",
+    "Itau Flexprev Advanced": "49.803.664/0001-88",
+    "Itau Dual Prev": "58.156.912/0001-37",
+    "Itau Sinfonia MM": "42.380.882/0001-08",
+    "Vinland Credito IQ": "61.735.868/0001-24",
 }
 DESDE = "2019-01"               # primeiro mes de carteira/cota (CDA existe desde 2005; mais antigo = mais download na 1a vez)
 # grupo economico: a CVM so informa o emissor. Regra = trecho do nome do emissor (sem acento, maiusculo) -> grupo.
@@ -648,17 +701,28 @@ def cdi_mensal(desde, diario=False):
 
 
 def ipca_indice():
-    """Numero-indice do IPCA (IBGE/SIDRA), mensal. Usado no valor do contrato futuro DAP."""
+    """Numero-indice do IPCA, mensal (indice "AAAA-MM"). Fonte: IBGE/SIDRA; se vier vazio ou falhar, monta pela
+    variacao mensal do Banco Central (SGS 433) ancorada no numero-indice oficial de dez/2019 (5320,25)."""
     f = CACHE / "ipca_indice.json"
     if not f.exists() or f.stat().st_mtime < time.time() - 86400:
         try:
             r = requests.get("https://apisidra.ibge.gov.br/values/t/1737/n1/all/v/2266/p/all", timeout=120).json()
-            f.write_text(json.dumps({x["D3C"]: x["V"] for x in r[1:]}))
-        except (requests.RequestException, ValueError, KeyError):
-            if not f.exists():
-                return pd.Series(dtype=float)
-    d = json.loads(f.read_text())
-    s = pd.Series({f"{k[:4]}-{k[4:]}": float(v) for k, v in d.items() if v not in ("...", "-", "")})
+            d = {x["D3C"]: x["V"] for x in r[1:]}
+            if len(d) > 12:
+                f.write_text(json.dumps(d))
+        except (requests.RequestException, ValueError, KeyError, TypeError, IndexError):
+            pass
+    s = pd.Series(dtype=float, index=pd.Index([], dtype=object))
+    if f.exists():
+        d = json.loads(f.read_text())
+        s = pd.Series({f"{k[:4]}-{k[4:]}": float(v) for k, v in d.items() if v not in ("...", "-", "")}, dtype=float)
+    if len(s) < 12:
+        v = sgs(433, "1994-01") / 100
+        if len(v):
+            v.index = v.index.strftime("%Y-%m")
+            nivel = (1 + v).cumprod()
+            s = nivel / nivel.get("2019-12", nivel.iloc[-1]) * 5320.25
+    s.index = s.index.astype(object)
     return s.sort_index()
 
 
@@ -753,9 +817,9 @@ def distribuicoes(d):
         r = np.r_[0.0, q[1:] / q[:-1] - 1]
         base = pd.Series(r).rolling(21, min_periods=5, center=True).median().values
         cand = (r < -0.004) & (r < base - 0.004) & (g.data.dt.day.values <= 12)
-        meses_cand = pd.Series(g.mes.values[cand]).unique()
+        meses_cand = sorted(set(g.mes[cand].tolist()))
         if len(meses_cand) >= 6:
-            ini, fim = pd.Period(meses_cand.min()), pd.Period(meses_cand.max())
+            ini, fim = pd.Period(meses_cand[0]), pd.Period(meses_cand[-1])
             if len(meses_cand) >= 0.6 * ((fim - ini).n + 1):
                 info[n] = (int(cand.sum()), float(-np.mean(r[cand]) * 100))
                 r = np.where(cand, base, r)

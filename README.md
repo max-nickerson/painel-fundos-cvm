@@ -21,7 +21,9 @@ Os fundos ficam em duas listas no topo de `lookthrough_cvm.py` (ou de `painel.py
 | **Retorno** | Período livre. Retorno e %CDI por categoria; melhores e piores ativos por contribuição (com % PL médio), com filtro de categorias, quantidade e busca. |
 | **Consolidado** | Escolha os fundos (digitando, ou Todos / Nossos / Peers) e o período: só fundos ativos desde o início do período. Retorno acumulado (nossos em laranja, peers em cinza, CDI tracejado), risco x retorno e ranking. |
 
-Categorias: **Caixa** (disponibilidades + compromissadas + provisões), **LF, LFSN, LFSC, DEB, DEBIN, Bonds, CRA, CRI, NC, FIDC**; o que não se encaixa fica com o nome da CVM (Títulos Públicos, CDB, FII...). DEBIN = debênture incentivada (Lei 12.431, cadastro do SND). LFSC = LF perpétua; LFSN = LF com prazo > 6 anos (a CVM não informa a subordinação).
+Categorias: **Caixa** (disponibilidades, compromissadas, LFT, provisões, caixa em dólar), **LF, LFSN, LFSC, DEB, DEBIN, Bonds** (dívida em dólar), **CRA, CRI, NC, FIDC, FIAGRO**; o que não se encaixa fica com o nome da CVM (Títulos Públicos, CDB, FII...). DEBIN = debênture incentivada (Lei 12.431, cadastro do SND). LFSC = LF perpétua; LFSN = LF com prazo > 6 anos (a CVM não informa a subordinação).
+
+Um fundo que esteja nas duas listas (NOSSOS_FUNDOS e PEERS) entra uma vez só, como nosso. Funciona com pandas 2 e 3 e com FastAPI/Starlette novos.
 
 ## Um arquivo só (copiar e colar)
 1. Instale o Python 3.11+ (python.org; no Windows marque *Add python.exe to PATH*).
