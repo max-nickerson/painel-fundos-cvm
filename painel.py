@@ -837,7 +837,7 @@ CAT_CORES = ["#2a78d6", "#1baf7a", "#eda100", "#e87ba4", "#4a3aa7", "#008300", "
 NOSSAS_CORES = ["#eb6834", "#c24f1d", "#f29a6b", "#a8401a", "#f5b38d"]
 GENERICO = (r"(?i)\b(FUNDO DE INVESTIMENTO|FUNDO|EM DIREITOS CREDIT[OÓ]RIOS|DE INVESTIMENTO|FIDC|FIC|FI|COTAS|MULTIMERCADO|"
             r"RENDA FIXA|CR[EÉ]DITO PRIVADO|RESPONSABILIDADE LIMITADA|RESP LTDA|N[AÃ]O PADRONIZADO|NP|LONGO PRAZO|LP)\b")
-METODO = 9                                     # suba quando mudar o calculo -> refaz o cache do dia
+METODO = 10                                     # suba quando mudar o calculo -> refaz o cache do dia
 CAIXA = ("Caixa",)
 CAIXA_CVM = ("Disponibilidades", "Operações Compromissadas", "Valores a receber", "Valores a pagar", lt.AJUSTE)
 TIPO_CASA = {"CDB/ RDB": "CDB", "CDB Vinculado": "CDB", "DPGE": "DPGE", "FI Imobiliário": "FII", "FI Participações": "FIP",
@@ -1328,15 +1328,27 @@ def pnl_futuro(c, p, m, ctx):
 def detalhe(nome, cnpj, df, ctx, pl, rent):
     """Tudo que as abas Carteira e Retorno mostram para um fundo + tabela de ativos (busca/top/grupos) de cada mes."""
     df = df.copy()
+    # fecha 100% do PL em todo mes: a diferenca vira uma linha explicita (confidencial se o mes tem parte relevante assim)
+    nd = df[~df.derivativo]
+    falta = (100 - nd.groupby("mes").perc_pl.sum()).loc[lambda x: x.abs() > 0.05]
+    if len(falta):
+        conf = nd[nd.confidencial].groupby("mes").perc_pl.sum().reindex(falta.index).fillna(0) >= 5
+        df = pd.concat([df, pd.DataFrame({"fundo": nome, "mes": falta.index, "categoria": lt.AJUSTE, "perc_pl": falta.values,
+                                          "ativo": "Diferença entre PL e carteira informada (CVM)", "derivativo": False,
+                                          "confidencial": conf.values, "chave": "ajuste|" + falta.index})], ignore_index=True)
+    for c in ("emissor", "codigo", "ativo", "tipo_ativo", "indexador", "categoria"):     # coluna toda vazia vira texto
+        if c in df.columns:
+            df[c] = df[c].astype(object)
     if len(ctx.snd):                                    # emissor faltando: nome do emissor pelo SND / ANBIMA
         df["emissor"] = df.emissor.fillna(df.codigo.map(ctx.snd.empresa))
     if ctx.an_h is not None and len(ctx.an_h):
         df["emissor"] = df.emissor.fillna(df.codigo.map(ctx.an_h.drop_duplicates("codigo", keep="last").set_index("codigo").nome))
     lixo = r"(?i)\bBONDS?\s*\d*\s*DAYS?\s*SETTLE\b|\s[\d.,]{5,}\b"           # bonds: 'BONDS 2 DAYS SETTLE - emissor - qtd'
-    df["emissor"] = df.emissor.str.replace(lixo, " ", regex=True).str.strip(" -").replace("", "Emissor não informado")
+    df["emissor"] = df.emissor.astype(object).str.replace(lixo, " ", regex=True).str.strip(" -").replace("", "Emissor não informado")
     emis = df[["emissor", "categoria"]].drop_duplicates()
-    gmap = {(e, c): lt.grupo(e, c) for e, c in zip(emis.emissor, emis.categoria)}
-    df["grupo"] = [gmap[(e, c)] for e, c in zip(df.emissor, df.categoria)]
+    k = lambda e: e if isinstance(e, str) else None                            # NaN nao serve de chave
+    gmap = {(k(e), c): lt.grupo(e, c) for e, c in zip(emis.emissor, emis.categoria)}
+    df["grupo"] = [gmap[(k(e), c)] for e, c in zip(df.emissor, df.categoria)]
     curto = df.ativo.str.replace(GENERICO, " ", regex=True).str.replace(r"\s+", " ", regex=True).str.strip(" -").str.slice(0, 40)
     df["grupo"] = df.grupo.fillna(curto)
     df["casa"] = casa(df, ctx)
@@ -1392,8 +1404,7 @@ def detalhe(nome, cnpj, df, ctx, pl, rent):
         if m not in real.index or pd.isna(real.get(m)):
             continue
         e0, gd0 = ricos[p]
-        w = e0[~e0.confidencial].copy()
-        w = w[w.perc_pl.abs() > 0]
+        w = e0[e0.perc_pl.abs() > 0].copy()            # confidenciais entram (rendem CDI + residuo): a soma sempre fecha
         cdi_m = float(ctx.cdi_m.get(m, 0.0))
         # 1) retorno de cada ativo: esperado = CDI + spread proprio; usa a variacao real de preco quando ela e critica
         #    (queda maior que 1,5 p.p. abaixo do esperado = pagamento de cupom/amortizacao -> fica o esperado)
@@ -1433,6 +1444,8 @@ def detalhe(nome, cnpj, df, ctx, pl, rent):
         # 3) resto (taxas, negociacao, marcacao fora do esperado) -> todas as categorias que nao sao caixa, pelo peso
         resid = float(real[m]) * 100 - ativo_c.sum()
         cr = w.perc_pl.gt(0) & ~cx
+        if not cr.any():
+            cr = w.perc_pl.gt(0)
         ativo_c[cr] += resid * w.perc_pl[cr] / w.perc_pl[cr].sum()
         atr_meses.append({"mes": m, "real": float(real[m]) * 100, "cdi": float(ctx.cdi_m.get(m, np.nan)) * 100,
                           "hedge": hedge, "resid": resid})
@@ -1443,7 +1456,7 @@ def detalhe(nome, cnpj, df, ctx, pl, rent):
             cats_atr.setdefault(c, {"contrib": [None] * jm, "peso": [None] * jm})
             cats_atr[c]["contrib"].append(float(por_cat.get(c, 0.0)))
             cats_atr[c]["peso"].append(float(peso.get(c, 0.0)))
-        nc = w[~cx].assign(c_=ativo_c[~cx])                               # caixa/compromissada fora do ranking
+        nc = w[~cx & ~w.casa.eq("Confidencial")].assign(c_=ativo_c[~cx & ~w.casa.eq("Confidencial")])                               # caixa/compromissada fora do ranking
         pa = nc.groupby(["rotulo", "casa"]).agg(v=("c_", "sum"), p=("perc_pl", "sum"), gr=("grupo", "first"),
                                                 cod=("codigo", "first"), em=("emissor", "first"))
         for (a, c), x in pa.iterrows():

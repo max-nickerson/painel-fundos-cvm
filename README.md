@@ -30,6 +30,10 @@ Categorias: **Caixa** (disponibilidades + compromissadas + provisões), **LF, LF
 
 Os dados ficam em **`dados_painel/`, na mesma pasta do `painel.py`**. A 1ª vez baixa ~2-3 GB da CVM (evite uma pasta sincronizada pelo OneDrive). Depois só baixa o que mudou e o painel do dia abre em segundos. `python painel.py excel` gera o Excel.
 
+## Diagnóstico (arquivo separado)
+Salve [`diagnostico.py`](diagnostico.py) na mesma pasta do `painel.py` e, depois de abrir o painel no dia, rode `python diagnostico.py`.
+Ele não muda nada: lê o painel já processado e gera `diagnostico.xlsx` (resumo, alertas, categorias fora da casa, modelo x ANBIMA). Confere: % do PL soma 100% em todo mês; buracos de spread/duration; parte estimada; valores fora do plausível; categorias somam o retorno real da cota; resíduo e hedge; o modelo de spread pelo preço contra a ANBIMA; cotas com saltos (amortização/distribuição), em que o % do CDI não é comparável.
+
 ## Versão em pastas
 ```bash
 pip install -r requirements.txt
