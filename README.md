@@ -42,6 +42,12 @@ pip install -r requirements.txt
 uvicorn server:app --port 7860
 ```
 
+## Extras (pasta `extras/`)
+
+- `carteira.py`: página local (http://localhost:7870) com o P&L de cada ativo da lista `ativos_iam.xlsx` (não incluída) em 1 semana, 1 mês e 6 meses, com os derivativos aplicados aos ativos que protegem (DAP → IPCA+, DI1 → pré, DOL/WDO + DDI → dólar). Só dados públicos grátis (negócios de balcão da B3, ANBIMA, Tesouro, BCB, FINRA, TradingView).
+- `relatorio_fundos.py`: PDF de uma página por fundo (retorno x CDI, carteira por categoria, retorno por categoria e setor em % do CDI, distribuição do % do CDI diário e % do CDI acumulado) e Excel de conferência dos últimos 5 dias com as tabelas em fórmulas. Lê o banco interno: ajustar `CONEXAO` no topo.
+- `FONTES_PRECO_SPREAD.md`: fontes gratuitas de preço e spread de crédito testadas (B3, ANBIMA, agentes fiduciários, TradingView, FINRA, curvas).
+
 ## Método
 - **Carteira:** look-through da CDA da CVM (abre cotas de fundos até o ativo final). Os fundos têm até 3 meses para publicar a carteira aberta, então a CVM republica os arquivos mensais; o painel confere uma vez por dia se mudaram e rebaixa. Meses com muita parte confidencial são marcados "(confid.)".
 - **Spread CDI e duration (100% dos ativos de crédito; cada ativo mostra a fonte):**
