@@ -5,3 +5,8 @@ __pycache__/
 cvm_cache/
 dados_carteira/
 *.pdf
+dados_monitor/
+dados/
+resultado/
+*.parquet
+*.pkl

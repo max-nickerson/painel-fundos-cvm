@@ -46,6 +46,8 @@ uvicorn server:app --port 7860
 
 - `carteira.py`: página local (http://localhost:7870) com o P&L de cada ativo da lista `ativos_iam.xlsx` (não incluída) em 1 semana, 1 mês e 6 meses, com os derivativos aplicados aos ativos que protegem (DAP → IPCA+, DI1 → pré, DOL/WDO + DDI → dólar). Só dados públicos grátis (negócios de balcão da B3, ANBIMA, Tesouro, BCB, FINRA, TradingView).
 - `relatorio_fundos.py`: PDF de uma página por fundo (retorno x CDI, carteira por categoria, retorno por categoria e setor em % do CDI, distribuição do % do CDI diário e % do CDI acumulado) e Excel de conferência dos últimos 5 dias com as tabelas em fórmulas. Lê o banco interno: ajustar `CONEXAO` no topo.
+- `monitor_fundo.py`: monitor ao vivo da carteira de um fundo (http://localhost:7880): spread e PU por ativo pelos negócios da B3 (15 min), variação em 1/5/21 dias, últimos negócios, ação do emissor, notícias (Bing e Reddit), fatos relevantes da CVM e alertas. `python monitor_fundo.py <codigo_IAM_fundo>` ou `python monitor_fundo.py exemplo`. Usa `carteira.py`.
+- `quant/`: coleta de dados públicos (`dados.py`, `dados_extra.py`), backtests (`backtest.py`, `estrategias.py`, `long_short.py`, `fundo_long.py`) e testes de robustez (`robustez.py`). Os dados baixados não vão para o repositório.
 - `FONTES_PRECO_SPREAD.md`: fontes gratuitas de preço e spread de crédito testadas (B3, ANBIMA, agentes fiduciários, TradingView, FINRA, curvas).
 
 ## Método
