@@ -174,7 +174,7 @@ dt = pd.Series(np.r_[1, np.diff(dias).astype("timedelta64[D]").astype(float)], i
 r_usd = (PE + np.outer(dt / 365, cup)) / PE.shift(1) - 1
 r_usd = r_usd.where(r_usd.abs() < .3)
 fx = ind.ptax.reindex(dias).ffill().pct_change()
-tk_dol = pd.Series([min((x for x in TX.columns if x.startswith("DOL") and VENC[x] > d + pd.Timedelta(days=5)), key=lambda x: VENC[x], default=None)
+tk_dol = pd.Series([min((x for x in F.columns if x.startswith("DOL") and pd.notna(F.at[d, x]) and VENC[x] > d + pd.Timedelta(days=5)), key=lambda x: VENC[x], default=None)
                     for d in dias], index=dias)
 r_dol = ret_tk(tk_dol)
 ust = lt.treasury()["UST"]
@@ -186,6 +186,7 @@ Dm = ((1 - (1 + y_m / 200) ** (-2 * anos)) / (y_m / 100)).clip(upper=12)
 yD = pd.DataFrame({k: [np.interp(a, *cv) / 100 if pd.notna(a) else np.nan for a, cv in zip(anos[k], curva)] for k in PE.columns}, index=dias)
 y3 = pd.Series([np.interp(.25, *cv) / 100 for cv in curva], index=dias)
 h_ust = -(yD.shift(1) / 252 - Dm.shift(1) * (yD - yD.shift(1)) - np.outer(y3.shift(1) / 252, np.ones(len(PE.columns))))
+print("eurobonds com retorno diário:", int(r_dol.notna().sum()), "dias de DOL;", int(((1 + r_usd).mul(1 + fx, axis=0) - (1 + r_usd).mul(r_dol, axis=0)).notna().sum().sum()), "pontos")
 exc_eb = ((1 + r_usd).mul(1 + fx, axis=0) - 1 - (1 + r_usd).mul(r_dol, axis=0) + h_ust.fillna(0)).sub(cdi, axis=0)
 
 
@@ -200,7 +201,9 @@ def tranches(sel, ret, lag, custo):
         if i0 >= len(dias):
             continue
         nomes = [k for k in nomes if k in ret.columns]
-        bloco = ret.iloc[i0:i0 + SEGURA][nomes].mean(axis=1).fillna(0)
+        cres = (1 + ret.iloc[i0:i0 + SEGURA][nomes].fillna(0)).cumprod()      # compra e segura: sem rebalancear todo dia
+        val = cres.mean(axis=1)
+        bloco = (val / val.shift(1).fillna(1) - 1).fillna(0)
         slot = m.ordinal % 3
         giro = len(set(nomes) ^ ant.get(slot, set())) / max(len(nomes), 1) if slot in ant else 1.0
         ant[slot] = set(nomes)
