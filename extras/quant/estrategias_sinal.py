@@ -2,7 +2,7 @@
 As três carteiras operando POR SINAL (qualquer dia, só quando o sinal é forte), contra o rebalanceamento mensal.
 Regras fixadas antes de rodar:
   Crédito: força do sinal = percentil do papel no mês (modelo de crédito; spread no high yield), disponível 1 dia útil após o mês.
-           compra se força >= 0,90 (top 10%) e há vaga; vende se força < 0,50, se o preço caiu mais de 1,5% em 5 dias
+           compra se força >= 0,90 (top 10%), há vaga e o preço não caiu mais de 1,5% em 5 dias (bond: 4%); vende só se força < 0,50
            (bond: 4%) ou se o papel some; vendido por queda fica 21 dias sem voltar; 1 papel por emissor; vaga vazia fica no CDI.
   Juros:   abre recebido/pago só quando os 3 sinais concordam (tendência 21d, inclinação, modelo); fecha quando o voto vira contra.
            O hedge das IPCA+/prefixadas segue a posição (recebido = sem hedge, senão hedge cheio).
@@ -51,19 +51,17 @@ def livro(forca_, ret, preco, n_max, custo, stop, emissor):
     Fv = F.to_numpy()
     cols = np.array(F.columns)
     em = np.array([emissor.get(c, c) for c in cols])
-    val, proib, out, ops, nav = {}, {}, np.zeros(len(dias)), 0, 1.0         # val: valor de cada papel desde a compra
+    val, proib, out, ops, nav, diario = {}, {}, np.zeros(len(dias)), 0, 1.0, []         # val: valor de cada papel desde a compra
     for t in range(1, len(dias)):
         f, q, i = Fv[t - 1], queda[t - 1], t - 1
         custo_dia = 0.0
         for k in list(val):                                               # saídas
             fraco = not (f[k] >= SAI)
-            caiu = q[k] < stop
             sumiu = np.isnan(R[max(i - 2, 0):i + 1, k]).all()
-            if fraco or caiu or sumiu:
+            if fraco or sumiu:                                            # sem stop por queda de preço (custava 1,4 a 3 pp a.a.)
                 custo_dia += val.pop(k) * custo
                 ops += 1
-                if caiu:
-                    proib[k] = t + ESPERA
+                diario.append((dias[t], cols[k], "venda"))
         if len(val) < n_max:                                              # entradas só com sinal forte, com o caixa livre
             emis_h = {em[k] for k in val}
             cand = np.where((f >= ENTRA) & ~(q < stop))[0]
@@ -77,6 +75,7 @@ def livro(forca_, ret, preco, n_max, custo, stop, emissor):
                 emis_h.add(em[k])
                 custo_dia += val[k] * custo
                 ops += 1
+                diario.append((dias[t], cols[k], "compra"))
         ganho = 0.0
         for k in val:
             r = R[t, k] if not np.isnan(R[t, k]) else 0.0
@@ -84,6 +83,8 @@ def livro(forca_, ret, preco, n_max, custo, stop, emissor):
             val[k] *= 1 + r
         out[t] = (ganho - custo_dia) / nav
         nav *= 1 + out[t]
+    livro.final = {cols[k]: v / nav for k, v in val.items()}            # carteira de hoje (peso no livro)
+    livro.ordens = diario
     return pd.Series(out, index=dias), ops
 
 
@@ -138,7 +139,7 @@ print(f"tempo com posição em juros: DAP {(pos['p_dap'] != 0).mean() * 100:.0f}
 linhas = []
 for nome, cart in [("Rebalanceamento mensal (juros com sinal mensal)", mensal["mensal de juros"]),
                    ("Rebalanceamento mensal (juros com sinal diário)", mensal["diário (sinal de juros diário)"]),
-                   ("Por sinal, qualquer dia", sinal)]:
+                   ("Por sinal, sem stop", sinal)]:
     for k, v in cart.items():
         linhas.append({"modo": nome, "carteira": k, **met(v)})
 tab = pd.DataFrame(linhas)
@@ -154,13 +155,13 @@ x = dias[dias >= ed.INI]
 c_ = cdi.reindex(x)
 fig, ax = plt.subplots(3, 2, figsize=(14, 12), gridspec_kw={"width_ratios": [3, 1.3]})
 cores = {"Rebalanceamento mensal (juros com sinal mensal)": "#8C8C8C", "Rebalanceamento mensal (juros com sinal diário)": "#BFCDEB",
-         "Por sinal, qualquer dia": "#EC7000"}
+         "Por sinal, sem stop": "#EC7000"}
 for i, (k, alvo) in enumerate(zip(sinal, (1, 5, 10))):
     a, d = ax[i, 0], ax[i, 1]
     a.plot(x, (1 + c_).cumprod() * 100, "k--", lw=1.6, label="CDI")
     a.plot(x, ((1 + c_) * (1 + alvo / 100) ** (1 / 252)).cumprod() * 100, color="#003399", ls=":", lw=1.2, label=f"meta CDI+{alvo}")
     for nome, cart in [("Rebalanceamento mensal (juros com sinal mensal)", mensal["mensal de juros"]),
-                       ("Rebalanceamento mensal (juros com sinal diário)", mensal["diário (sinal de juros diário)"]), ("Por sinal, qualquer dia", sinal)]:
+                       ("Rebalanceamento mensal (juros com sinal diário)", mensal["diário (sinal de juros diário)"]), ("Por sinal, sem stop", sinal)]:
         v = cart[k].reindex(x)
         eq = (1 + c_ + v).cumprod()
         a.plot(x, eq * 100, color=cores[nome], lw=2.2 if "sinal," in nome else 1.5, label=f"{nome}: CDI {met(cart[k])['CDI + (pp a.a.)']:+.1f}")

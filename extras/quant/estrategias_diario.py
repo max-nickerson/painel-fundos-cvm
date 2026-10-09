@@ -92,7 +92,7 @@ snd = snd[snd.codigo.isin(cad.index) & snd.pct_curva.between(30, 150) & (snd.qtd
 snd = snd.assign(w=snd.pct_curva * snd.qtd * snd.pu_med, f=snd.qtd * snd.pu_med)
 P = (snd.groupby(["date", "codigo"]).w.sum() / snd.groupby(["date", "codigo"]).f.sum()).unstack().reindex(dias)
 P = P[[c for c in P.columns if c in pn["D"].columns]]
-Pi = np.exp(np.log(P).interpolate(limit=21, limit_area="inside"))
+Pi = np.exp(np.log(P).interpolate(limit=21, limit_area="inside")).ffill(limit=21)   # depois do último negócio: repete o preço
 c = cad.loc[P.columns]
 du = cdi.groupby(mes).transform("size")
 cdi_aa = (1 + cdi.groupby(mes).transform(lambda s: (1 + s).prod() - 1)) ** (252 / du) - 1

@@ -59,6 +59,17 @@ def posicao_banco(fundo):
     return nome, p.date.max(), p.total_nav_moeda_fundo.sum(), pos.rename(columns={"codigo_IAM_ativo": "codigo"})
 
 
+def posicao_modelo(perfil):
+    """Carteira-modelo de hoje gerada por quant/sinais_ao_vivo.py (operando por sinal, sem stop)."""
+    import json
+    r = ct.PASTA / "quant" / "resultado"
+    pos = pd.read_csv(r / f"carteira_modelo_{perfil}.csv").assign(ticker=lambda x: x.get("isin", x.codigo), setor=None, grupo=None)
+    j = json.load(open(r / "juros_hoje.json", encoding="utf-8"))
+    dap, di = j["alavancagem"][perfil]
+    juros = [] if not dap else [f"{n} {m:g}x: {j['juros'][n]['leitura'].split(' (')[0].lower()}" for n, m in (("DAP 5 anos", dap), ("DI1 2 anos", di))]
+    return f"Modelo {perfil} (por sinal)", pd.Timestamp.today().normalize(), 1e9, pos, juros, j["gerado"]
+
+
 def posicao_exemplo(ativos, codigos_negociados):
     """Carteira fictícia com ativos reais da lista IAM (pesos sorteados), preferindo os que negociaram no último mês."""
     rng = np.random.default_rng(3)
@@ -250,7 +261,11 @@ def monta():
     log(f"Negócios da B3 ({len(dias)} dias)...")
     with ThreadPoolExecutor(6) as ex:
         neg = pd.concat([x for x in ex.map(negocios_dia, dias) if len(x)], ignore_index=True)
-    if MODO == "exemplo":
+    juros_modelo, gerado = [], ""
+    if MODO.startswith("modelo"):
+        nomef, data_pos, pl, pos, juros_modelo, gerado = posicao_modelo(MODO.split()[-1])
+        ativos, _, _ = ct.identifica(list(pos.codigo) + list(pos.ticker.dropna()), cad, isn, vencs)
+    elif MODO == "exemplo":
         codigos = ct.le_lista()
         ativos, _, _ = ct.identifica(codigos, cad, isn, vencs)
         nomef, data_pos, pl, pos = posicao_exemplo(ativos, set(neg[neg.data >= dias[-22]].cod) | set(neg[neg.data >= dias[-22]].isn))
@@ -371,7 +386,7 @@ def monta():
     w = cred.pl / cred.pl.sum() if len(cred) else cred.pl
     ESTADO.update(status="ok", dados={
         "fundo": nomef, "data_pos": f"{pd.Timestamp(data_pos):%d/%m/%Y}", "pl": pl, "atualizado": pd.Timestamp.now().strftime("%d/%m %H:%M"),
-        "b3_hoje": int((neg.data == hoje).sum()), "mercado": futuros_agora(), "ativos": L.replace({np.nan: None}).to_dict("records"),
+        "b3_hoje": int((neg.data == hoje).sum()), "mercado": futuros_agora(), "juros_modelo": juros_modelo, "gerado": gerado, "ativos": L.replace({np.nan: None}).to_dict("records"),
         "kpi": {"spread": float((cred.spread * w).sum()) if len(cred) else None, "d1": float((cred.d1.fillna(0) * w).sum()) if len(cred) else None,
                 "d21": float((cred.d21.fillna(0) * w).sum()) if len(cred) else None, "dur": float((L.dur.fillna(0) * L.pl).sum() / max(L.pl.sum(), 1e-9)),
                 "impacto": float(L.impacto.sum()), "negociados": int((L.neg_hoje > 0).sum()), "n": len(L)},
@@ -464,7 +479,7 @@ async function carrega(){const r=await (await fetch('/api/estado')).json();
  if(r.status!=='ok'){$('#log').innerHTML=(r.log||[]).join('<br>')+(r.erro?'<br><b>'+r.erro+'</b>':'');setTimeout(carrega,3000);return}
  D=r;$('#carga').style.display='none';$('#app').style.display='';desenha();setTimeout(carrega,60000)}
 function desenha(){
- $('#nome').textContent=D.fundo;$('#sub').textContent=`Posição de ${D.data_pos} · PL R$ ${f(D.pl/1e6,0)} mi · mercado atualizado ${D.atualizado} · ${D.b3_hoje} negócios na B3 hoje`;
+ $('#nome').textContent=D.fundo;$('#sub').textContent=(D.gerado?`Sinais de ${D.gerado}`:`Posição de ${D.data_pos} · PL R$ ${f(D.pl/1e6,0)} mi`)+` · mercado atualizado ${D.atualizado} · ${D.b3_hoje} negócios na B3 hoje`+(D.juros_modelo.length?' · Juros do modelo: '+D.juros_modelo.join(' | '):'');
  $('#fita').innerHTML=D.mercado.map(m=>`<span class="tick">${m.nome} <b>${f(m.valor,m.unid=='%'&&m.valor>1000?0:m.unid=='%'?4:3)}</b> <span class="${(m.var>0)==(m.unid=='bps')?'dn':'up'}">${fs(m.var,m.unid=='bps'?0:2)}${m.unid=='bps'?' bps':'%'}</span></span>`).join('');
  const k=D.kpi;
  $('#kpis').innerHTML=[[f(k.spread),'Spread médio ponderado (%)'],[fs(k.d1),'Spread hoje (bps)'],[fs(k.d21),'Spread no mês (bps)'],[f(k.dur,1),'Duration (anos)'],

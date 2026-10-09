@@ -166,10 +166,12 @@ def futuros_b3():
 def cadastro():
     f = CACHE / "cadastro.parquet"
     if velho(f):
-        for k in range(6):
+        for k in range(8):                                                # o arquivo do dia às vezes vem incompleto
             d = b3_csv("InstrumentRegistration", pd.Timestamp.today() - pd.Timedelta(days=k))
-            if len(d) > 1000:
+            if len(d) > 1000 and (d.iloc[:, 3] == "DEB").sum() > 1000 and (d.iloc[:, 3] == "LF").sum() > 1000:
                 break
+        else:
+            return pd.read_parquet(f) if f.exists() else d
         d.columns = ["cod", "isn", "emissor", "tipo", "incent", "serie", "emissao_n", "idx", "pct", "taxa", "base", "venc", "qtd",
                      "pu_emis", "restrito", "temis", "oferta"]
         d = d[d.tipo != "COE"]
