@@ -62,8 +62,10 @@ def categoria(p):
 
 def prepara(p, q):
     """Realocação que não muda o total do fundo (por fundo e dia):
-      livro USD: N = %PL líquido do caixa em USD; recebem Bonds com %PL > 0 e caixa USD só se N > 0;
-                 peso_fx = perc_nav / (Bonds positivos + max(N, 0)). Câmbio total do dia e hedges USD/Bonds vão por peso_fx.
+      livro USD: N = %PL líquido do caixa em USD (inclui CPR em USD).
+                 câmbio: peso_fx = perc_nav / (Bonds positivos + N) para Bonds positivos e TODAS as linhas de caixa USD,
+                         inclusive negativas (o passivo em USD leva o próprio câmbio); se Bonds + N < 10% dos Bonds, volta à regra do hedge.
+                 hedges USD/Bonds: peso_hedge = perc_nav / (Bonds positivos + max(N, 0)), só Bonds positivos e caixa USD se N > 0.
       Hedge IPCA / Hedge Pre: para ativos em BRL com indexador IPCA+ / PRE, pelo %PL.
       Linhas de hedge zeradas quando o pool teve quem recebesse. Cotas duplicadas (fundo já explodido) são retiradas."""
     p = p.assign(date=pd.to_datetime(p.date), perc_nav=p.perc_nav.fillna(0), pnl_total_perc=p.pnl_total_perc.fillna(0))
@@ -81,12 +83,18 @@ def prepara(p, q):
     B = g(p.perc_nav.where(p.categoria.eq("Bonds") & (p.perc_nav > 0), 0))
     recebe = (p.categoria.eq("Bonds") & (p.perc_nav > 0)) | (usd_cash & (N > 0))
     den = B + N.clip(lower=0)
-    p["peso_fx"] = np.where(recebe & (den > 0), p.perc_nav / den.where(den > 0, 1), 0)
+    p["peso_hedge"] = np.where(recebe & (den > 0), p.perc_nav / den.where(den > 0, 1), 0)      # hedge só protege quem está comprado
+    # câmbio: cada linha em USD leva o seu, inclusive caixa/CPR negativo (passivo em USD também perde/ganha com o dólar).
+    # Exposição líquida = Bonds + caixa USD; se for pequena demais (< 10% dos Bonds) a divisão fica instável -> regra antiga.
+    liq = B + N
+    ok = liq > .1 * B
+    p["peso_fx"] = np.where(ok, np.where((p.categoria.eq("Bonds") & (p.perc_nav > 0)) | usd_cash, p.perc_nav / liq.where(ok, 1), 0),
+                            p.peso_hedge)
     flag = p.count_cambio.eq(1) if "count_cambio" in p else ~p.duplicated(k)
     p["cambio_linha"] = p.pnl_cambio_explosao_perc.where(flag, 0).fillna(0)       # a única linha de câmbio por fundo e dia
     p["cambio_total"] = g(p.cambio_linha)
     p["fx_alocado"] = p.peso_fx * p.cambio_total
-    p["pnl_hedge_usd"] = p.peso_fx * g(p.pnl_total_perc.where(p.categoria.isin(["Hedge USD", "Hedge Bonds"]), 0))
+    p["pnl_hedge_usd"] = p.peso_hedge * g(p.pnl_total_perc.where(p.categoria.isin(["Hedge USD", "Hedge Bonds"]), 0))
     for nome, cat, ix in (("pnl_hedge_ipca", "Hedge IPCA", "IPCA"), ("pnl_hedge_pre", "Hedge Pre", "PRE")):
         alvo = brl & ~hedge & idx.eq(ix)
         w = g(p.perc_nav.where(alvo, 0))
