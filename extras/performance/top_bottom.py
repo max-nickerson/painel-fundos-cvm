@@ -1,5 +1,6 @@
 """
 Top 15 / Bottom 15 contribuições de PnL (hedgeado) por fundo -> PDF (1 página por fundo) + Excel.
+Excel: só a base é dado (como vem do SQL); o ranking e tudo o mais são fórmulas.
 Uso:  python top_bottom.py 2026-10-01 2026-10-06
 """
 import os, sys
@@ -9,8 +10,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
-from performance import (FUNDOS, FORA, NAVY, LARANJA, COLS_BASE, FORMULAS_BASE, carrega_posicoes, br,
-                         desenha_tabela, formatos, tabela_excel, escreve_df)
+from performance import (FUNDOS, FORA, NAVY, LARANJA, COLS_BASE, FORMULAS_BASE, FORMULAS_PERF, _ID, carrega_posicoes,
+                         br, desenha_tabela, formatos, tabela_excel)
 
 # ============================== CONFIG ==============================
 # FUNDOS vem do performance.py (edite lá). Para usar outra lista só aqui:
@@ -71,6 +72,65 @@ def pagina_pdf(pdf, nome, ini, fim, top, bot):
     plt.close(fig)
 
 
+_TK = f"{_ID},base[ticker_venc],[@ticker_venc],base[eh_ativo],1"
+_ATE_O_FIM = lambda c: f"[@{c}]:INDEX(base[{c}],ROWS(base[{c}]))"            # desta linha até o fim da tabela
+# por ativo (ticker_venc): retorno composto no período, rateado pelas linhas do ativo em cada dia; a ÚLTIMA linha
+# de cada (fundo, ativo) carrega o total, e as colunas rank_* permitem pegar o maior/menor com AGGREGATE
+FORMULAS_TB = [
+    FORMULAS_PERF[0],                                                       # eh_ativo
+    ("n_tk", f"IF([@eh_ativo]=0,0,COUNTIFS({_TK}))"),
+    ("ln_total", f"IF([@n_tk]=0,0,LN(1+SUMIFS(base[PnL Hedgeado],{_TK}))/[@n_tk])"),
+    ("ln_bruto", f"IF([@n_tk]=0,0,LN(1+SUMIFS(base[pnl_total_perc],{_TK}))/[@n_tk])"),
+    ("ultima", f"IF([@eh_ativo]=0,0,IF(COUNTIFS({_ATE_O_FIM('codigo_IAM_fundo')},[@codigo_IAM_fundo],"
+               f"{_ATE_O_FIM('ticker_venc')},[@ticker_venc],{_ATE_O_FIM('eh_ativo')},1)=1,1,0))"),
+    ("total_tk", 'IF([@ultima]=1,(EXP(SUMIFS(base[ln_total],base[codigo_IAM_fundo],[@codigo_IAM_fundo],'
+                 'base[ticker_venc],[@ticker_venc]))-1)*10000,"")'),
+    ("bruto_tk", 'IF([@ultima]=1,(EXP(SUMIFS(base[ln_bruto],base[codigo_IAM_fundo],[@codigo_IAM_fundo],'
+                 'base[ticker_venc],[@ticker_venc]))-1)*10000,"")'),
+    ("fin_tk", 'IF([@ultima]=1,SUMIFS(base[total_nav_moeda_fundo],base[codigo_IAM_fundo],[@codigo_IAM_fundo],'
+               'base[ticker_venc],[@ticker_venc],base[date],MAX(base[date]),base[eh_ativo],1)/10^6,"")'),
+    ("rank_pos", 'IF([@ultima]=1,IF([@total_tk]>0,[@total_tk]+ROW()/10^9,""),"")'),
+    ("rank_neg", 'IF([@ultima]=1,IF([@total_tk]<0,[@total_tk]-ROW()/10^9,""),"")'),
+]
+
+
+def aba_excel(wb, cod, nome, F):
+    """Top e bottom por fórmulas: AGGREGATE (maior/menor ignorando erros) + MATCH/INDEX na base."""
+    ws = wb.add_worksheet(nome[:31])
+    ws.set_column(0, 0, 5)
+    ws.set_column(1, 1, 28)
+    ws.set_column(2, 9, 16)
+    ws.write(0, 0, nome, F["titulo"])
+    ws.write(1, 0, "Fundo", F["sub"])
+    ws.write(1, 1, cod)
+    ws.write(1, 3, "Período", F["sub"])
+    ws.write_formula(1, 4, "=MIN(base[date])", F["data"])
+    ws.write(1, 5, "a", F["sub"])
+    ws.write_formula(1, 6, "=MAX(base[date])", F["data"])
+    cab = ["#", "Código do ativo", "Categoria", "Grupo econômico", "Subsetor", "PnL bruto (bps)",
+           "PnL hedge + câmbio (bps)", "PnL total (bps)", "Financeiro (mm)", "linha na base"]
+    r0 = 3
+    for titulo, func, col in ((f"Top {N} contribuições positivas", 14, "rank_pos"), (f"Bottom {N} contribuições", 15, "rank_neg")):
+        ws.write(r0, 0, titulo, F["sub"])
+        for j, h in enumerate(cab):
+            ws.write(r0 + 1, j, h, F["head"])
+        for k in range(1, N + 1):
+            r, n = r0 + 1 + k, r0 + 2 + k
+            idx = f"$J{n}"
+            ws.write(r, 0, k)
+            ws.write_formula(r, 9, f'=IFERROR(MATCH(_xlfn.AGGREGATE({func},6,base[{col}]/(base[codigo_IAM_fundo]=$B$2),{k}),'
+                                   f'base[{col}],0),"")')
+            for j, c in enumerate(["ticker_venc", "categoria", "grupo_economico_iam", "subsetor_iam"], 1):
+                ws.write_formula(r, j, f'=IF({idx}="","",INDEX(base[{c}],{idx})&"")')
+            ws.write_formula(r, 5, f'=IF({idx}="","",INDEX(base[bruto_tk],{idx}))', F["num2"])
+            ws.write_formula(r, 6, f'=IF({idx}="","",H{n}-F{n})', F["num2"])
+            ws.write_formula(r, 7, f'=IF({idx}="","",INDEX(base[total_tk],{idx}))', F["num2"])
+            ws.write_formula(r, 8, f'=IF({idx}="","",INDEX(base[fin_tk],{idx}))', F["num2"])
+        ws.write(r0 + N + 2, 6, "Soma (bps)", F["sub"])
+        ws.write_formula(r0 + N + 2, 7, f"=SUM(H{r0 + 3}:H{r0 + N + 2})", F["num2"])
+        r0 += N + 5
+
+
 def main():
     if len(sys.argv) < 3:
         sys.exit("Uso: python top_bottom.py <data_ini> <data_fim>   ex: python top_bottom.py 2026-10-01 2026-10-06")
@@ -80,26 +140,17 @@ def main():
 
     os.makedirs(PASTA_SAIDA, exist_ok=True)
     arq = os.path.join(PASTA_SAIDA, f"top_bottom_{ini:%Y%m%d}_{fim:%Y%m%d}")
-    fmts = {"PnL bruto (bps)": "num2", "PnL hedge + câmbio (bps)": "num2", "PnL total (bps)": "num2",
-            "Financeiro (mm)": "num2"}
     with PdfPages(arq + ".pdf") as pdf, pd.ExcelWriter(arq + ".xlsx", engine="xlsxwriter") as xw:
-        wb = xw.book
-        F = formatos(wb)
+        F = formatos(xw.book)
         for cod, nome in FUNDOS.items():
             if not (pos.codigo_IAM_fundo == cod).any():
                 print(f"  {nome}: sem posições, pulando")
                 continue
             top, bot = ranking(pos, cod)
             pagina_pdf(pdf, nome, ini, fim, top, bot)
-            ws = wb.add_worksheet(nome[:31])
-            ws.set_column(0, 8, 18)
-            ws.write(0, 0, f"{nome} - Período: {ini:%d/%m/%Y} a {fim:%d/%m/%Y}", F["titulo"])
-            r = escreve_df(ws, 2, 0, top.rename(columns=COLUNAS), fmts, F,
-                           f"Top {N} contribuições positivas | soma: {br(top.total.sum())} bps")
-            escreve_df(ws, r, 0, bot.rename(columns=COLUNAS), fmts, F,
-                       f"Bottom {N} contribuições | soma: {br(bot.total.sum())} bps")
+            aba_excel(xw.book, cod, nome, F)
             print(f"  {nome} ok")
-        tabela_excel(wb, "base", pos[COLS_BASE], FORMULAS_BASE, F)
+        tabela_excel(xw.book, "base", pos[COLS_BASE], FORMULAS_BASE + FORMULAS_TB, F)
     print(f"Gerado: {arq}.pdf / .xlsx")
 
 

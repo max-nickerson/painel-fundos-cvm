@@ -1,8 +1,9 @@
 """
 Relatório de performance por fundo -> PDF (1 página por fundo) + Excel.
+Excel: só base, cotas e cdi são dados (como vêm do SQL); tabelas, gráficos e tudo o mais são fórmulas.
 Uso:  python performance.py 2026-10-08      (sem data = D-1 útil)
 """
-import io, os, re, sys
+import os, re, sys
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -259,17 +260,6 @@ def estilo_eixo(ax, titulo):
         ax.spines[s].set_visible(False)
 
 
-def png(func, *args):
-    fig, ax = plt.subplots(figsize=(6.5, 3))
-    func(ax, *args)
-    fig.tight_layout()
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=150)
-    plt.close(fig)
-    buf.seek(0)
-    return buf
-
-
 # ----------------------------- PDF -----------------------------
 def desenha_tabela(ax, df, titulo, cores=None, fonte=7):
     """df já formatado em texto. cores: {(linha, coluna): (fundo, texto)} com linha 1 = 1ª linha de dados."""
@@ -337,6 +327,7 @@ def formatos(wb):
             "txt": f(), "pct2": f(num_format="0.00%"), "pct1": f(num_format="0.0%"),
             "cdi": f(num_format="0.0%", bg_color=VERDE), "sinal": f(num_format="+0.00%;-0.00%"),
             "num2": f(num_format="#,##0.00"), "num1": f(num_format="0.0"), "data": f(num_format="dd/mm/yyyy"),
+            "pct0": f(num_format="0%"), "mes": f(num_format="mm/yyyy"),
             "verm": wb.add_format({"font_color": "red"})}
 
 
@@ -355,54 +346,175 @@ def tabela_excel(wb, nome, df, formulas=(), F=None):
     return ws
 
 
-def escreve_df(ws, r, c, df, fmts, F, titulo):
-    """Escreve um bloco (título + cabeçalho + valores). fmts: {coluna: chave de formato}."""
-    ws.write(r, c, titulo, F["sub"])
-    for j, col in enumerate(df.columns):
-        ws.write(r + 1, c + j, col, F["head"])
-        for i, v in enumerate(df[col]):
-            ws.write(r + 2 + i, c + j, "-" if pd.isna(v) else v, F[fmts.get(col, "txt")])
-        if fmts.get(col) == "cdi":
-            ws.conditional_format(r + 2, c + j, r + 1 + len(df), c + j,
-                                  {"type": "cell", "criteria": "<", "value": 1, "format": F["verm"]})
-    return r + len(df) + 4
-
-
-def aba_relatorio(wb, nome, base, T, F):
-    ws = wb.add_worksheet(nome[:31])
-    ws.set_column(0, 7, 14)
-    ws.write(0, 0, nome, F["titulo"])
-    ws.write(1, 0, f"Data base: {base:%d/%m/%Y}", F["txt"])
-    r = escreve_df(ws, 3, 0, T["t1"], {"Fundo": "pct2", "CDI": "pct2", "% CDI": "cdi", "CDI+": "sinal"}, F,
-                   "1. Performance por janela")
-    r = escreve_df(ws, r, 0, T["t2"], {"Exposição": "pct1", "Financeiro (mm)": "num2", "Spread CDI+": "num2",
-                                       "Duration (anos)": "num1"}, F, "2. Estoque por categoria")
-    r = escreve_df(ws, r, 0, T["t3"], {j: "cdi" for j in JANELAS}, F, "3. % CDI por tipo")
-    escreve_df(ws, r, 0, T["t4"], {"% PL": "pct1", **{j: "cdi" for j in JANELAS}}, F, "4. % CDI por setor")
-    ws.insert_image(3, 9, "hist.png", {"image_data": png(grafico_hist, T["diario"]), "x_scale": 0.7, "y_scale": 0.7})
-    ws.insert_image(25, 9, "acum.png", {"image_data": png(grafico_acum, T["acum"]), "x_scale": 0.7, "y_scale": 0.7})
-
-
-def excel_rentabilidade(wb, pos5, ret5, cdi, F):
-    """Rentabilidade por data com SUMIFS sobre a tabela base (fundo, categoria, setor)."""
-    tabela_excel(wb, "rent_fundo", ret5[["date", "codigo_IAM_fundo", "pnl_oficial", "cdi", "ultimos_2d"]], [
-        ("pnl_calc", "SUMIFS(base[PnL Hedgeado],base[date],[@date],base[codigo_IAM_fundo],[@codigo_IAM_fundo])"),
-        ("dif_bps", 'IF([@pnl_oficial]="","",([@pnl_calc]-[@pnl_oficial])*10000)'),
-        ("pnl_usado", 'IF(OR([@pnl_oficial]="",[@ultimos_2d]),[@pnl_calc],[@pnl_oficial])'),
-        ("pct_cdi", "IFERROR([@pnl_usado]/[@cdi],0)")], F)
-    p = pos5[~pos5.categoria.isin(FORA)]
-    for nome, col in [("rent_categoria", "categoria"), ("rent_setor", "setor_iam")]:
-        chaves = p.dropna(subset=[col])[["date", "codigo_IAM_fundo", col]].drop_duplicates()
-        chaves = chaves.assign(cdi=chaves.date.map(cdi)).sort_values(["codigo_IAM_fundo", col, "date"])
-        filtro = f"base[date],[@date],base[codigo_IAM_fundo],[@codigo_IAM_fundo],base[{col}],[@{col}]"
-        tabela_excel(wb, nome, chaves, [
-            ("pnl", f"SUMIFS(base[PnL Hedgeado],{filtro})"), ("perc_nav", f"SUMIFS(base[perc_nav],{filtro})"),
-            ("retorno", "IFERROR([@pnl]/[@perc_nav],0)"), ("pct_cdi", "IFERROR([@retorno]/[@cdi],0)")], F)
-
-
+EXCEL_DIAS = 5               # dias de posição colados no Excel (base); janelas maiores das tabelas 3 e 4 só se a base cobrir
 COLS_BASE = ["date", "codigo_IAM_fundo", "codigo_IAM_ativo", "ticker_venc", "categoria", "indexador", "moeda_ativo",
              "grupo_economico_iam", "setor_iam", "subsetor_iam", "perc_nav", "total_nav_moeda_fundo", "spread_cdi",
              "macaulay_duration", "pnl_total_perc", "pnl_cambio"]
+_FORA = "OR(" + ",".join(f'[@categoria]="{c}"' for c in FORA) + ")"
+_CAT = f"{_ID},base[categoria],[@categoria]"
+_SET = f"{_ID},base[setor_iam],[@setor_iam],base[eh_ativo],1"
+# colunas auxiliares da base para as tabelas 2, 3 e 4 (retorno do dia de cada grupo, rateado pelas linhas do grupo)
+FORMULAS_PERF = [
+    ("eh_ativo", f"IF({_FORA},0,1)"),
+    ("spread_x_pl", "[@spread_cdi]*[@perc_nav]"),
+    ("dur_x_pl", "[@macaulay_duration]/252*[@perc_nav]"),
+    ("cdi", "SUMIFS(cdi[cdi],cdi[date],[@date])"),
+    ("n_cat", f"COUNTIFS({_CAT})"),
+    ("nav_cat", f"SUMIFS(base[perc_nav],{_CAT})"),
+    ("ln_cat", f"IF([@nav_cat]=0,0,LN(1+SUMIFS(base[PnL Hedgeado],{_CAT})/[@nav_cat])/[@n_cat])"),
+    ("ln_cdi_cat", "IF([@nav_cat]=0,0,LN(1+[@cdi])/[@n_cat])"),
+    ("n_set", f'IF(OR([@eh_ativo]=0,[@setor_iam]=""),0,COUNTIFS({_SET}))'),
+    ("nav_set", f"IF([@n_set]=0,0,SUMIFS(base[perc_nav],{_SET}))"),
+    ("ln_set", f"IF([@nav_set]=0,0,LN(1+SUMIFS(base[PnL Hedgeado],{_SET})/[@nav_set])/[@n_set])"),
+    ("ln_cdi_set", "IF([@nav_set]=0,0,LN(1+[@cdi])/[@n_set])"),
+]
+FORMULAS_COTAS = [
+    ("pnl_calc", "SUMIFS(base[PnL Hedgeado],base[date],[@date],base[codigo_IAM_fundo],[@codigo_IAM_fundo])"),
+    ("ultimos_2d", "[@date]>=LARGE(cdi[date],2)"),
+    ("pnl_usado", 'IF(OR([@pnl_oficial]="",[@ultimos_2d]),[@pnl_calc],[@pnl_oficial])'),
+    ("cdi", "SUMIFS(cdi[cdi],cdi[date],[@date])"),
+    ("ln_fundo", "LN(1+[@pnl_usado])"),
+    ("ln_cdi", "LN(1+[@cdi])"),
+    ("pct_cdi", 'IFERROR([@pnl_usado]/[@cdi],"")'),
+]
+INICIO = {"5D": "=LARGE(cdi[date],5)", "MTD": "=DATE(YEAR($B$3),MONTH($B$3),1)", "YTD": "=DATE(YEAR($B$3),1,1)",
+          "12M": "=EDATE($B$3,-12)+1", "24M": "=EDATE($B$3,-24)+1", "36M": "=EDATE($B$3,-36)+1"}
+BINS = [round(-.5 + .1 * i, 2) for i in range(31)]                   # faixas do histograma: -50% a 250% do CDI
+
+
+def aba_fundo(wb, cod, nome, cats, setores, F):
+    """Aba do fundo 100% em fórmulas sobre as tabelas base, cotas e cdi. Só o código do fundo e os rótulos são texto."""
+    ws = wb.add_worksheet(nome[:31])
+    ws.set_column(0, 0, 18)
+    ws.set_column(1, 7, 12)
+    ws.set_column(9, 13, 12)
+    ws.write(0, 0, nome, F["titulo"])
+    ws.write(1, 0, "Fundo", F["sub"])
+    ws.write(1, 1, cod)
+    ws.write(2, 0, "Data base", F["sub"])
+    ws.write_formula(2, 1, "=MAX(cdi[date])", F["data"])
+    ws.write(3, 0, "Base completa desde", F["sub"])
+    ws.write_formula(3, 1, f"=LARGE(cdi[date],{EXCEL_DIAS})", F["data"])
+    fc = 'cotas[codigo_IAM_fundo],$B$2,cotas[date],">="&{ini},cotas[date],"<="&$B$3'
+    # 1. performance por janela (linhas 8 a 13: a coluna B guarda o início de cada janela)
+    ws.write(5, 0, "1. Performance por janela", F["sub"])
+    for j, h in enumerate(["Janela", "Início", "Fundo", "CDI", "% CDI", "CDI+", "Dias"]):
+        ws.write(6, j, h, F["head"])
+    for i, jan in enumerate(JANELAS):
+        r, n = 7 + i, 8 + i
+        f = fc.format(ini=f"$B{n}")
+        ws.write(r, 0, jan)
+        ws.write_formula(r, 1, INICIO[jan], F["data"])
+        ws.write_formula(r, 2, f"=EXP(SUMIFS(cotas[ln_fundo],{f}))-1", F["pct2"])
+        ws.write_formula(r, 3, f"=EXP(SUMIFS(cotas[ln_cdi],{f}))-1", F["pct2"])
+        ws.write_formula(r, 4, f'=IFERROR(C{n}/D{n},"-")', F["cdi"])
+        ws.write_formula(r, 5, f'=IFERROR(((1+C{n})/(1+D{n}))^(252/G{n})-1,"-")', F["sinal"])
+        ws.write_formula(r, 6, f"=COUNTIFS({f})")
+    ws.conditional_format(7, 4, 12, 4, {"type": "cell", "criteria": "<", "value": 1, "format": F["verm"]})
+    ini = {jan: f"$B${8 + i}" for i, jan in enumerate(JANELAS)}
+    # 2. estoque por categoria na data base
+    r0 = 15
+    ws.write(r0 - 1, 0, "2. Estoque por categoria", F["sub"])
+    for j, h in enumerate(["Categoria", "Exposição", "Financeiro (mm)", "Spread CDI+", "Duration (anos)"]):
+        ws.write(r0, j, h, F["head"])
+    for i, c in enumerate(cats + ["Total"]):
+        r, n = r0 + 1 + i, r0 + 2 + i
+        crit = "base[codigo_IAM_fundo],$B$2,base[date],$B$3," + ("base[eh_ativo],1" if c == "Total" else f"base[categoria],$A{n}")
+        ws.write(r, 0, c, F["sub"] if c == "Total" else F["txt"])
+        ws.write_formula(r, 1, f"=SUMIFS(base[perc_nav],{crit})", F["pct1"])
+        ws.write_formula(r, 2, f"=SUMIFS(base[total_nav_moeda_fundo],{crit})/10^6", F["num2"])
+        ws.write_formula(r, 3, f'=IFERROR(SUMIFS(base[spread_x_pl],{crit})/B{n},"-")', F["num2"])
+        ws.write_formula(r, 4, f'=IFERROR(SUMIFS(base[dur_x_pl],{crit})/B{n},"-")', F["num1"])
+
+    # 3 e 4. % CDI por categoria e por setor: (grupo acumulado) / (CDI acumulado nos mesmos dias)
+    def bloco(r0, titulo, rotulos, ln, ln_cdi, col, extra_pl):
+        ws.write(r0 - 1, 0, titulo, F["sub"])
+        cab = [("Categoria" if col == "categoria" else "Setor")] + (["% PL"] if extra_pl else []) + JANELAS
+        for j, h in enumerate(cab):
+            ws.write(r0, j, h, F["head"])
+        k0 = 2 if extra_pl else 1
+        for i, g in enumerate(rotulos):
+            r, n = r0 + 1 + i, r0 + 2 + i
+            filtro = f"base[codigo_IAM_fundo],$B$2,base[{col}],$A{n}" + (",base[eh_ativo],1" if col == "setor_iam" else "")
+            ws.write(r, 0, g)
+            if extra_pl:
+                ws.write_formula(r, 1, f"=SUMIFS(base[perc_nav],{filtro},base[date],$B$3)", F["pct1"])
+            for k, jan in enumerate(JANELAS):
+                per = f'{filtro},base[date],">="&{ini[jan]},base[date],"<="&$B$3'
+                ws.write_formula(r, k0 + k, f'=IF($B$4>{ini[jan]},"-",IFERROR((EXP(SUMIFS(base[{ln}],{per}))-1)/'
+                                            f'(EXP(SUMIFS(base[{ln_cdi}],{per}))-1),"-"))', F["cdi"])
+        if rotulos:
+            ws.conditional_format(r0 + 1, k0, r0 + len(rotulos), k0 + len(JANELAS) - 1,
+                                  {"type": "cell", "criteria": "<", "value": 1, "format": F["verm"]})
+        return r0 + len(rotulos) + 4
+
+    r0 = bloco(r0 + len(cats) + 5, "3. % CDI por tipo", cats[1:] + cats[:1] if cats[:1] == ["Cash"] else cats,
+               "ln_cat", "ln_cdi_cat", "categoria", False)
+    bloco(r0, "4. % CDI por setor", setores, "ln_set", "ln_cdi_set", "setor_iam", True)
+
+    # histograma do PnL diário em % CDI (12M), colunas J:K
+    f12 = fc.format(ini=ini["12M"])
+    ws.write(5, 9, "Distribuição diária em % CDI (12M)", F["sub"])
+    ws.write(6, 9, "Faixa (% CDI)", F["head"])
+    ws.write(6, 10, "Dias", F["head"])
+    for i, b in enumerate(BINS[:-1]):
+        r, n = 7 + i, 8 + i
+        ws.write(r, 9, b, F["pct0"])
+        lo = "" if i == 0 else f',cotas[pct_cdi],">="&J{n}'
+        hi = "" if i == len(BINS) - 2 else f',cotas[pct_cdi],"<"&J{n + 1}'
+        ws.write_formula(r, 10, f"=COUNTIFS({f12}{lo}{hi})")
+    rm = 7 + len(BINS)
+    ws.write(rm, 9, "Mediana", F["sub"])
+    ws.write_array_formula(rm, 10, rm, 10, "{=MEDIAN(IF((cotas[codigo_IAM_fundo]=$B$2)*(cotas[date]>=" + ini["12M"] +
+                           ")*(cotas[date]<=$B$3)*ISNUMBER(cotas[pct_cdi]),cotas[pct_cdi]))}", F["pct1"])
+    ws.write(rm + 1, 9, "Hoje", F["sub"])
+    ws.write_formula(rm + 1, 10, "=SUMIFS(cotas[pct_cdi],cotas[codigo_IAM_fundo],$B$2,cotas[date],$B$3)", F["pct1"])
+    # acumulado: fundo acumulado / CDI acumulado no fim de cada mês da janela de 12M, colunas M:N
+    ws.write(5, 12, "Fundo acum. / CDI acum. (12M)", F["sub"])
+    ws.write(6, 12, "Mês", F["head"])
+    ws.write(6, 13, "% CDI acum.", F["head"])
+    for i, k in enumerate(range(12, -1, -1)):
+        r, n = 7 + i, 8 + i
+        per = f12.replace('"<="&$B$3', f'"<="&MIN(M{n},$B$3)')
+        ws.write_formula(r, 12, f"=EOMONTH($B$3,-{k})", F["mes"])
+        ws.write_formula(r, 13, f"=IF(M{n}<{ini['12M']},NA(),IFERROR((EXP(SUMIFS(cotas[ln_fundo],{per}))-1)/"
+                                f"(EXP(SUMIFS(cotas[ln_cdi],{per}))-1),NA()))", F["pct1"])
+    aba = nome[:31].replace("'", "''")
+    g = wb.add_chart({"type": "column"})
+    g.add_series({"categories": f"='{aba}'!$J$8:$J${6 + len(BINS)}", "values": f"='{aba}'!$K$8:$K${6 + len(BINS)}",
+                  "fill": {"color": NAVY}, "gap": 10, "name": "Dias"})
+    g.set_title({"name": "Distribuição do PnL diário em % CDI (12M)", "name_font": {"size": 10, "color": NAVY}})
+    g.set_legend({"none": True})
+    g.set_x_axis({"num_format": "0%"})
+    ws.insert_chart(5, 15, g, {"x_scale": 1.3, "y_scale": 1.1})
+    g = wb.add_chart({"type": "line"})
+    g.add_series({"categories": f"='{aba}'!$M$8:$M$20", "values": f"='{aba}'!$N$8:$N$20", "line": {"color": NAVY},
+                  "marker": {"type": "circle", "size": 4, "fill": {"color": LARANJA}}, "name": "% CDI acum."})
+    g.set_title({"name": "Fundo acumulado em % do CDI acumulado (12M)", "name_font": {"size": 10, "color": NAVY}})
+    g.set_legend({"none": True})
+    g.set_y_axis({"num_format": "0%"})
+    g.set_x_axis({"num_format": "mm/yyyy"})
+    ws.insert_chart(23, 15, g, {"x_scale": 1.3, "y_scale": 1.1})
+
+
+def excel_formulas(xw, pos, cotas_ofic, cdi, datas, fundos_ok, F):
+    """Só três tabelas são dados colados (base, cotas e cdi, como vêm do SQL); todo o resto é fórmula."""
+    wb = xw.book
+    base_dt = datas[-1]
+    for cod in fundos_ok:                                                  # abas dos fundos primeiro
+        hoje = pos[(pos.codigo_IAM_fundo == cod) & (pos.date == base_dt) & ~pos.categoria.isin(FORA)]
+        aba_fundo(wb, cod, FUNDOS[cod], ordena(hoje.categoria.unique()), sorted(hoje.setor_iam.dropna().unique()), F)
+    # cotas: cotas oficiais + (fundo, dia) que só existem na posição (ex.: D-1 ainda sem cota), na janela de 36M
+    of = cotas_ofic[cotas_ofic.date.isin(datas)].groupby(["date", "codigo_IAM_fundo"]).fundo_pnl_perc.sum()
+    chaves = pd.MultiIndex.from_frame(pos[pos.date.isin(datas)][["date", "codigo_IAM_fundo"]].drop_duplicates())
+    ct = of.reindex(of.index.union(chaves)).rename("pnl_oficial").reset_index()
+    ct = ct[ct.codigo_IAM_fundo.isin(fundos_ok)].sort_values(["codigo_IAM_fundo", "date"])
+    # base: últimos EXCEL_DIAS dias + dias antigos sem cota oficial (o retorno desses dias vem da posição)
+    sem_cota = set(ct[ct.pnl_oficial.isna()].date)
+    dias_base = set(datas[-EXCEL_DIAS:]) | sem_cota
+    tabela_excel(wb, "base", pos[pos.date.isin(dias_base)][COLS_BASE], FORMULAS_BASE + FORMULAS_PERF, F)
+    tabela_excel(wb, "cotas", ct, FORMULAS_COTAS, F)
+    tabela_excel(wb, "cdi", cdi.loc[datas[0]:base_dt].rename("cdi").rename_axis("date").reset_index(), (), F)
 
 
 # ----------------------------- main -----------------------------
@@ -417,24 +529,22 @@ def main():
     print(f"Data base {base:%d/%m/%Y} | {len(datas)} dias úteis | carregando posições...")
 
     pos = carrega_posicoes(FUNDOS, datas[0], base)
-    ret = retorno_fundo(pos, carrega_cotas(FUNDOS, datas[0], base), cdi, datas, base)
+    cotas = carrega_cotas(FUNDOS, datas[0], base)
+    ret = retorno_fundo(pos, cotas, cdi, datas, base)
 
     os.makedirs(PASTA_SAIDA, exist_ok=True)
     arq = os.path.join(PASTA_SAIDA, f"performance_{base:%Y%m%d}")
     with PdfPages(arq + ".pdf") as pdf, pd.ExcelWriter(arq + ".xlsx", engine="xlsxwriter") as xw:
-        wb = xw.book
-        F = formatos(wb)
+        F = formatos(xw.book)
+        ok = []
         for cod, nome in FUNDOS.items():
             if not (pos.codigo_IAM_fundo == cod).any():
                 print(f"  {nome}: sem posições, pulando")
                 continue
-            T = tabelas_fundo(cod, pos, ret, cdi, datas, base)
-            pagina_pdf(pdf, nome, base, T)
-            aba_relatorio(wb, nome, base, T, F)
+            pagina_pdf(pdf, nome, base, tabelas_fundo(cod, pos, ret, cdi, datas, base))
+            ok.append(cod)
             print(f"  {nome} ok")
-        pos5 = pos[pos.date.isin(datas[-5:])]
-        tabela_excel(wb, "base", pos5[COLS_BASE], FORMULAS_BASE, F)
-        excel_rentabilidade(wb, pos5, ret[ret.date.isin(datas[-5:])], cdi, F)
+        excel_formulas(xw, pos, cotas, cdi, datas, ok, F)
     print(f"Gerado: {arq}.pdf / .xlsx")
 
 
