@@ -34,7 +34,7 @@ def ranking(pos, cod):
     out[["bruto", "hedge", "total"]] *= 1e4
     info = p.sort_values("date").groupby("ticker_venc")[["categoria", "grupo_economico_iam", "subsetor_iam"]].last()
     fim = p[p.date == p.date.max()]
-    fin = (fim.perc_nav * fim.total_nav_moeda_fundo).groupby(fim.ticker_venc).sum() / 1e6
+    fin = fim.total_nav_moeda_fundo.groupby(fim.ticker_venc).sum() / 1e6
     out = out.join(info).join(fin.rename("financeiro")).fillna({"financeiro": 0}).reset_index()
     out = out[list(COLUNAS)].fillna("n.a.")
     top = out[out.total > 0].nlargest(N, "total").reset_index(drop=True)

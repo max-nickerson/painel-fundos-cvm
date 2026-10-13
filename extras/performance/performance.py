@@ -143,15 +143,13 @@ def calcula_hedge(df):
 
 
 def retorno_fundo(pos, cotas, cdi, datas, base):
-    """Oficial (cotas PL), exceto: últimos 2 dias -> calculado; até 1M com |dif| > 5 bps -> calculado."""
+    """Oficial (cotas PL), exceto D-1 e D-2 -> calculado (e dia sem cota oficial -> calculado)."""
     calc = pos.groupby(["codigo_IAM_fundo", "date"])["PnL Hedgeado"].sum().rename("pnl_calc")
     ofic = cotas.groupby(["codigo_IAM_fundo", "date"])["fundo_pnl_perc"].sum().rename("pnl_oficial")
     df = pd.concat([calc, ofic], axis=1).reset_index()
     df = df[df.date.isin(datas)]
     df["ultimos_2d"] = df.date.isin(datas[-2:])
-    recente = df.date > base - pd.DateOffset(months=1)
-    usa_calc = df.pnl_oficial.isna() | df.ultimos_2d | (recente & ((df.pnl_calc - df.pnl_oficial).abs() > 0.0005))
-    df["pnl_usado"] = np.where(usa_calc, df.pnl_calc, df.pnl_oficial)
+    df["pnl_usado"] = np.where(df.pnl_oficial.isna() | df.ultimos_2d, df.pnl_calc, df.pnl_oficial)
     df["cdi"] = df.date.map(cdi)
     return df
 
@@ -186,12 +184,12 @@ def tabelas_fundo(cod, pos, ret, cdi, datas, base):
     t1 = pd.DataFrame(t1, columns=["Janela", "Fundo", "CDI", "% CDI", "CDI+"])
 
     p = pos[(pos.codigo_IAM_fundo == cod) & ~pos.categoria.isin(FORA)]
-    hoje = p[p.date == p.date.max()].assign(fin=lambda d: d.perc_nav * d.total_nav_moeda_fundo / 1e6)
+    hoje = p[p.date == p.date.max()].assign(fin=lambda d: d.total_nav_moeda_fundo / 1e6,
+                                            dur=lambda d: d.macaulay_duration / 252)
     media = lambda g, col: np.average(g[col], weights=g.perc_nav) if g.perc_nav.sum() else 0
     linhas = []
     for nome, g in list(hoje.groupby("categoria")) + [("Total", hoje)]:
-        linhas.append([nome, g.perc_nav.sum() / hoje.perc_nav.sum(), g.fin.sum(), media(g, "spread_cdi"),
-                       media(g, "macaulay_duration")])
+        linhas.append([nome, g.perc_nav.sum(), g.fin.sum(), media(g, "spread_cdi"), media(g, "dur")])
     t2 = pd.DataFrame(linhas, columns=["Categoria", "Exposição", "Financeiro (mm)", "Spread CDI+", "Duration (anos)"])
     t2 = t2.set_index("Categoria").loc[ordena(hoje.categoria.unique()) + ["Total"]].reset_index()
 
@@ -217,9 +215,9 @@ def tabelas_fundo(cod, pos, ret, cdi, datas, base):
 
     r12 = r[r.index.isin(datas_janela(datas, base, "12M"))].dropna()
     diario = (r12 / cdi.reindex(r12.index)).replace([np.inf, -np.inf], np.nan).dropna()
-    mes = r12.index.to_period("M")
-    mensal = r12.groupby(mes).apply(comp) / cdi.reindex(r12.index).groupby(mes).apply(comp)
-    return {"t1": t1, "t2": t2, "t3": t3, "t4": t4, "diario": diario, "acum": mensal.expanding().mean()}
+    acum = ((1 + r12).cumprod() - 1) / ((1 + cdi.reindex(r12.index)).cumprod() - 1)   # fundo acumulado / CDI acumulado
+    acum = acum.groupby(r12.index.to_period("M")).last()                             # ponto no fim de cada mês
+    return {"t1": t1, "t2": t2, "t3": t3, "t4": t4, "diario": diario, "acum": acum}
 
 
 # ----------------------------- gráficos -----------------------------
@@ -251,7 +249,7 @@ def grafico_acum(ax, acum):
                 xytext=(0, 6), ha="center", color=LARANJA, fontsize=8, fontweight="bold")
     ax.yaxis.set_major_formatter(lambda y, _: f"{y:.0f}%")
     ax.tick_params(axis="x", labelrotation=45)
-    estilo_eixo(ax, "Fundo acumulado em % CDI (média expansível, 12M)")
+    estilo_eixo(ax, "Fundo acumulado em % do CDI acumulado (12M)")
 
 
 def estilo_eixo(ax, titulo):
@@ -390,8 +388,7 @@ def excel_rentabilidade(wb, pos5, ret5, cdi, F):
     tabela_excel(wb, "rent_fundo", ret5[["date", "codigo_IAM_fundo", "pnl_oficial", "cdi", "ultimos_2d"]], [
         ("pnl_calc", "SUMIFS(base[PnL Hedgeado],base[date],[@date],base[codigo_IAM_fundo],[@codigo_IAM_fundo])"),
         ("dif_bps", 'IF([@pnl_oficial]="","",([@pnl_calc]-[@pnl_oficial])*10000)'),
-        ("pnl_usado", 'IF(OR([@pnl_oficial]="",[@ultimos_2d],ABS([@pnl_calc]-[@pnl_oficial])>0.0005),'
-                      '[@pnl_calc],[@pnl_oficial])'),
+        ("pnl_usado", 'IF(OR([@pnl_oficial]="",[@ultimos_2d]),[@pnl_calc],[@pnl_oficial])'),
         ("pct_cdi", "IFERROR([@pnl_usado]/[@cdi],0)")], F)
     p = pos5[~pos5.categoria.isin(FORA)]
     for nome, col in [("rent_categoria", "categoria"), ("rent_setor", "setor_iam")]:
