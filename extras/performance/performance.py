@@ -2,6 +2,7 @@
 Relatório de performance por fundo -> PDF (1 página por fundo) + Excel.
 Excel: só base, cotas e cdi são dados (como vêm do SQL); tabelas, gráficos e tudo o mais são fórmulas.
 Uso:  python performance.py 2026-10-08      (sem data = D-1 útil)
+      --sem-cache (busca tudo no SQL) | --limpa-cache (apaga o cache e recomeça). Cache em cache_performance/.
 """
 import os, re, sys
 import numpy as np
@@ -85,42 +86,163 @@ FORMULAS_BASE = [
 ]
 
 
-# ----------------------------- dados -----------------------------
+# ----------------------------- dados (com cache) -----------------------------
+# Cache em disco: dados com mais de MESES_FRESCOS meses são considerados definitivos e ficam salvos;
+# a cada rodada o SQL só busca os últimos MESES_FRESCOS meses (+ o que faltar no cache).
+#   cache_performance/<tabela>_<versão do SQL>/<fundo>/<AAAA-MM>.parquet  +  manifesto.json {fundo: {desde, ate}}
+#   - versão = hash do texto do SQL: mudou a query, o cache antigo é ignorado sozinho;
+#   - gravação atômica (arquivo temporário + rename) e o manifesto só avança depois dos arquivos gravados;
+#   - ao regravar um trecho, as linhas daquele intervalo de datas são substituídas (nunca duplica);
+#   - arquivo corrompido: o fundo é apagado do cache e baixado de novo.
+# Uso: python performance.py [data] [--sem-cache] [--limpa-cache]
+PASTA_CACHE = "cache_performance"
+MESES_FRESCOS = 2
+USA_CACHE = "--sem-cache" not in sys.argv
+if "--limpa-cache" in sys.argv and os.path.isdir(PASTA_CACHE):
+    import shutil
+    shutil.rmtree(PASTA_CACHE)
+sys.argv = [a for a in sys.argv if a not in ("--sem-cache", "--limpa-cache")]
+UM_DIA = pd.Timedelta(days=1)
+
+
 def sql_data(d):
     return pd.Timestamp(d).strftime("%Y-%m-%d")
-
-
-def carrega_cdi(ini, fim):
-    df = try_retry(f"SELECT date, pnl_perc FROM FUNDOS_DADOS_INDICES WHERE codigo_IAM_indice = 'CDI' "
-                   f"AND date BETWEEN '{sql_data(ini)}' AND '{sql_data(fim)}'")
-    return df.assign(date=pd.to_datetime(df.date)).set_index("date")["pnl_perc"].astype(float).sort_index()
-
-
-def carrega_cotas(fundos, ini, fim):
-    df = try_retry(f"SELECT date, codigo_IAM_fundo, fundo_pnl_perc FROM VIEW_FUNDOS_COTAS_PL "
-                   f"WHERE codigo_IAM_fundo IN ({lista(fundos)}) AND date BETWEEN '{sql_data(ini)}' AND '{sql_data(fim)}'")
-    return df.assign(date=pd.to_datetime(df.date), fundo_pnl_perc=df.fundo_pnl_perc.astype(float))
 
 
 def lista(fundos):
     return ", ".join(f"'{f}'" for f in fundos)
 
 
-def carrega_posicoes(fundos, ini, fim):
-    """Explodida: últimos 6M na _DOWN, o resto na _DOWN_HIST. Já devolve as colunas de hedge."""
-    ini, fim = pd.Timestamp(ini), pd.Timestamp(fim)
+def _versao(*textos):
+    import hashlib
+    return hashlib.md5("|".join(textos).encode("utf-8")).hexdigest()[:8]
+
+
+def _grava(df, arq):
+    os.makedirs(os.path.dirname(arq), exist_ok=True)
+    tmp = arq + ".tmp"
+    df.to_parquet(tmp, index=False)
+    os.replace(tmp, arq)
+
+
+def _meses(a, b):
+    return pd.period_range(pd.Timestamp(a), pd.Timestamp(b), freq="M")
+
+
+def com_cache(tabela, versao, chaves, ini, fim, busca):
+    """busca(chaves, a, b) -> DataFrame com coluna 'date' (datetime) e 'chave'. Devolve [ini, fim] para as chaves."""
+    import json
+    ini, fim = pd.Timestamp(ini).normalize(), pd.Timestamp(fim).normalize()
+    corte = pd.Timestamp.today().normalize() - pd.DateOffset(months=MESES_FRESCOS)   # antes disso: definitivo
+    lim = min(fim, corte - UM_DIA)
+    partes = []
+    if USA_CACHE and ini <= lim:
+        pasta = os.path.join(PASTA_CACHE, f"{tabela}_{versao}")
+        arq_man = os.path.join(pasta, "manifesto.json")
+        man = json.load(open(arq_man, encoding="utf-8")) if os.path.exists(arq_man) else {}
+
+        def salva_man():
+            os.makedirs(pasta, exist_ok=True)
+            json.dump(man, open(arq_man + ".tmp", "w", encoding="utf-8"), indent=1, sort_keys=True)
+            os.replace(arq_man + ".tmp", arq_man)
+
+        def le(k, a, b):
+            out = []
+            for m in _meses(a, b):
+                arq = os.path.join(pasta, str(k), f"{m}.parquet")
+                if os.path.exists(arq):
+                    x = pd.read_parquet(arq)
+                    out.append(x[x.date.between(a, b)])
+            return pd.concat(out, ignore_index=True) if out else None
+
+        def atualiza(k, a, b):
+            novo = busca([k], a, b)
+            for m in _meses(a, b):
+                arq = os.path.join(pasta, str(k), f"{m}.parquet")
+                velho = pd.read_parquet(arq) if os.path.exists(arq) else None
+                if velho is not None:
+                    velho = velho[~velho.date.between(a, b)]               # substitui o intervalo (nunca duplica)
+                pedaco = novo[novo.date.dt.to_period("M") == m]
+                junto = pd.concat([x for x in (velho, pedaco) if x is not None and len(x)], ignore_index=True) \
+                    if (velho is not None and len(velho)) or len(pedaco) else None
+                if junto is not None:
+                    _grava(junto.sort_values("date"), arq)
+
+        for k in chaves:
+            ent = man.get(str(k))
+            d, a = (pd.Timestamp(ent["desde"]), pd.Timestamp(ent["ate"])) if ent else (None, None)
+            lacunas = [(ini, lim)] if ent is None else \
+                [x for x in ((ini, d - UM_DIA), (a + UM_DIA, lim)) if x[0] <= x[1]]
+            for x0, x1 in lacunas:
+                print(f"  cache {tabela} {k}: buscando {x0:%d/%m/%Y} a {x1:%d/%m/%Y}")
+                atualiza(k, x0, x1)
+                d = x0 if d is None or x0 < d else d
+                a = x1 if a is None or x1 > a else a
+                man[str(k)] = {"desde": sql_data(d), "ate": sql_data(a)}
+                salva_man()                                                # só depois dos arquivos gravados
+            try:
+                x = le(k, ini, lim)
+            except Exception as e:                                         # arquivo corrompido: refaz este fundo
+                print(f"  cache {tabela} {k} com problema ({e}); baixando de novo")
+                import shutil
+                shutil.rmtree(os.path.join(pasta, str(k)), ignore_errors=True)
+                man.pop(str(k), None)
+                salva_man()
+                atualiza(k, ini, lim)
+                man[str(k)] = {"desde": sql_data(ini), "ate": sql_data(lim)}
+                salva_man()
+                x = le(k, ini, lim)
+            if x is not None and len(x):
+                partes.append(x)
+    elif ini <= lim:
+        partes.append(busca(list(chaves), ini, lim))
+    if fim >= corte:                                                       # parte recente: sempre do SQL
+        partes.append(busca(list(chaves), max(ini, corte), fim))
+    partes = [x for x in partes if x is not None and len(x)]
+    return pd.concat(partes, ignore_index=True) if partes else busca(list(chaves), fim + UM_DIA, fim)
+
+
+SQL_CDI = ("SELECT date, pnl_perc FROM FUNDOS_DADOS_INDICES WHERE codigo_IAM_indice = 'CDI' "
+           "AND date BETWEEN '{ini}' AND '{fim}'")
+SQL_COTAS = ("SELECT date, codigo_IAM_fundo, fundo_pnl_perc FROM VIEW_FUNDOS_COTAS_PL "
+             "WHERE codigo_IAM_fundo IN ({fundos}) AND date BETWEEN '{ini}' AND '{fim}'")
+VIEW_RECENTE, VIEW_HIST = "VW_FUNDOS_POSICAO_EXPLODIDA_DOWN", "VW_FUNDOS_POSICAO_EXPLODIDA_DOWN_HIST"
+
+
+def _data(df):
+    return df.assign(date=pd.to_datetime(df.date)) if len(df) else df.assign(date=pd.to_datetime(pd.Series([], dtype=object)))
+
+
+def carrega_cdi(ini, fim):
+    busca = lambda ks, a, b: _data(try_retry(SQL_CDI.format(ini=sql_data(a), fim=sql_data(b))))
+    df = com_cache("cdi", _versao(SQL_CDI), ["CDI"], ini, fim, busca)
+    return df.drop_duplicates("date").set_index("date")["pnl_perc"].astype(float).sort_index()
+
+
+def carrega_cotas(fundos, ini, fim):
+    busca = lambda ks, a, b: _data(try_retry(SQL_COTAS.format(fundos=lista(ks), ini=sql_data(a), fim=sql_data(b))))
+    df = com_cache("cotas", _versao(SQL_COTAS), list(fundos), ini, fim, busca)
+    return df.assign(fundo_pnl_perc=df.fundo_pnl_perc.astype(float))
+
+
+def _busca_posicoes(fundos, ini, fim):
+    """Explodida: últimos 6M na _DOWN, o resto na _DOWN_HIST."""
     corte = pd.Timestamp.today().normalize() - pd.DateOffset(months=6)
     partes = []
     if ini < corte:
-        partes.append(("VW_FUNDOS_POSICAO_EXPLODIDA_DOWN_HIST", ini, min(fim, corte - pd.Timedelta(days=1))))
+        partes.append((VIEW_HIST, ini, min(fim, corte - UM_DIA)))
     if fim >= corte:
-        partes.append(("VW_FUNDOS_POSICAO_EXPLODIDA_DOWN", max(ini, corte), fim))
-    df = pd.concat([try_retry(SQL_POSICAO.format(view=v, ini=sql_data(a), fim=sql_data(b), fundos=lista(fundos)))
-                    for v, a, b in partes], ignore_index=True)
-    df["date"] = pd.to_datetime(df.date)
+        partes.append((VIEW_RECENTE, max(ini, corte), fim))
+    return _data(pd.concat([try_retry(SQL_POSICAO.format(view=v, ini=sql_data(a), fim=sql_data(b), fundos=lista(fundos)))
+                            for v, a, b in partes], ignore_index=True))
+
+
+def carrega_posicoes(fundos, ini, fim):
+    """Posições (com cache) já com as colunas de hedge."""
+    df = com_cache("posicoes", _versao(SQL_POSICAO, VIEW_RECENTE, VIEW_HIST), list(fundos), ini, fim, _busca_posicoes)
     for c in ["perc_nav", "total_nav_moeda_fundo", "spread_cdi", "macaulay_duration", "pnl_total_perc", "pnl_cambio"]:
         df[c] = pd.to_numeric(df[c]).fillna(0)
-    return calcula_hedge(df.sort_values(["date", "codigo_IAM_fundo"]).reset_index(drop=True))
+    return calcula_hedge(df.sort_values(["date", "codigo_IAM_fundo"], kind="stable").reset_index(drop=True))
 
 
 def calcula_hedge(df):

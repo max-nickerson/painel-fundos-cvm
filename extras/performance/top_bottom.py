@@ -1,7 +1,7 @@
 """
 Top 15 / Bottom 15 contribuições de PnL (hedgeado) por fundo -> PDF (1 página por fundo) + Excel.
 Excel: só a base é dado (como vem do SQL); o ranking e tudo o mais são fórmulas.
-Uso:  python top_bottom.py 2026-10-01 2026-10-06
+Uso:  python top_bottom.py 2026-10-01 2026-10-06   [--sem-cache | --limpa-cache]  (mesmo cache do performance.py)
 """
 import os, sys
 import numpy as np
