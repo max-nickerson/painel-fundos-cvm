@@ -327,7 +327,8 @@ def formatos(wb):
             "txt": f(), "pct2": f(num_format="0.00%"), "pct1": f(num_format="0.0%"),
             "cdi": f(num_format="0.0%", bg_color=VERDE), "sinal": f(num_format="+0.00%;-0.00%"),
             "num2": f(num_format="#,##0.00"), "num1": f(num_format="0.0"), "data": f(num_format="dd/mm/yyyy"),
-            "pct0": f(num_format="0%"), "mes": f(num_format="mm/yyyy"),
+            "pct0": f(num_format="0%"), "mes": f(num_format="mm/yyyy"), "num2b": f(num_format="#,##0.00", bold=True),
+            "data_head": f(bold=True, font_color="white", bg_color=NAVY, align="center", num_format="dd/mm/yyyy"),
             "verm": wb.add_format({"font_color": "red"})}
 
 
@@ -382,7 +383,7 @@ INICIO = {"5D": "=LARGE(cdi[date],5)", "MTD": "=DATE(YEAR($B$3),MONTH($B$3),1)",
 BINS = [round(-.5 + .1 * i, 2) for i in range(31)]                   # faixas do histograma: -50% a 250% do CDI
 
 
-def aba_fundo(wb, cod, nome, cats, setores, F):
+def aba_fundo(wb, cod, nome, cats, setores, F, extras=()):
     """Aba do fundo 100% em fórmulas sobre as tabelas base, cotas e cdi. Só o código do fundo e os rótulos são texto."""
     ws = wb.add_worksheet(nome[:31])
     ws.set_column(0, 0, 18)
@@ -450,7 +451,44 @@ def aba_fundo(wb, cod, nome, cats, setores, F):
 
     r0 = bloco(r0 + len(cats) + 5, "3. % CDI por tipo", cats[1:] + cats[:1] if cats[:1] == ["Cash"] else cats,
                "ln_cat", "ln_cdi_cat", "categoria", False)
-    bloco(r0, "4. % CDI por setor", setores, "ln_set", "ln_cdi_set", "setor_iam", True)
+    r0 = bloco(r0, "4. % CDI por setor", setores, "ln_set", "ln_cdi_set", "setor_iam", True)
+
+    # 5. PnL de cada dia da base por categoria (bps do PL), para diagnóstico
+    ws.write(r0 - 1, 0, f"5. PnL diário por categoria (bps do PL) - últimos {EXCEL_DIAS} dias", F["sub"])
+    ws.write(r0, 0, "Categoria", F["head"])
+    col = lambda k: chr(ord("B") + k)                                      # colunas B.. = dias; última = soma
+    for k in range(EXCEL_DIAS):
+        ws.write_formula(r0, 1 + k, f"=LARGE(cdi[date],{EXCEL_DIAS - k})", F["data_head"])
+    ws.write(r0, 1 + EXCEL_DIAS, f"Soma {EXCEL_DIAS}D", F["head"])
+    fd = lambda k: f"base[codigo_IAM_fundo],$B$2,base[date],{col(k)}${r0 + 1}"
+    linhas = [(c, f"SUMIFS(base[PnL Hedgeado],{{f}},base[categoria],\"{c}\")*10^4", "num2") for c in cats + extras] + [
+        ("Total calculado", "SUMIFS(base[PnL Hedgeado],{f})*10^4", "neg"),
+        ("Cota oficial", 'IF(COUNTIFS({fc},cotas[pnl_oficial],"<>")=0,"-",SUMIFS(cotas[pnl_oficial],{fc})*10^4)', "num2"),
+        ("Calculado - oficial", 'IFERROR({tot}-{ofi},"-")', "num2"),
+        ("Retorno usado", "SUMIFS(cotas[pnl_usado],{fc})*10^4", "neg"),
+        ("CDI", "SUMIFS(cdi[cdi],cdi[date],{d})*10^4", "num2"),
+        ("% CDI", 'IFERROR({usado}/{cdi},"-")', "cdi"),
+        ("Memória (antes da alocação):", None, None)] + [
+        (f"  {h} bruto", f"SUMIFS(base[pnl_total_perc],{{f}},base[categoria],\"{h}\")*10^4", "num2") for h in HEDGES] + [
+        ("  Câmbio (linha única)", "SUMIFS(base[pnl_cambio],{f})*10^4", "num2")]
+    pos_ = {rot: r0 + 2 + i for i, (rot, _, _) in enumerate(linhas)}       # linha Excel (1-based) de cada item
+    for i, (rot, form, fmt) in enumerate(linhas):
+        r = r0 + 1 + i
+        ws.write(r, 0, rot, F["sub"] if form is None or fmt == "neg" else F["txt"])
+        if form is None:
+            continue
+        for k in range(EXCEL_DIAS + 1):
+            if k == EXCEL_DIAS:                                            # coluna de soma (não para % CDI e oficial)
+                if rot in ("% CDI", "Cota oficial", "Calculado - oficial"):
+                    continue
+                ws.write_formula(r, 1 + k, f"=SUM(B{r + 1}:{col(k - 1)}{r + 1})", F["num2b"] if fmt == "neg" else F["num2"])
+                continue
+            c = col(k)
+            dref = f"{c}${r0 + 1}"
+            ff = form.format(f=fd(k), fc=f"cotas[codigo_IAM_fundo],$B$2,cotas[date],{dref}", d=dref,
+                             tot=f"{c}{pos_['Total calculado']}", ofi=f"{c}{pos_['Cota oficial']}",
+                             usado=f"{c}{pos_['Retorno usado']}", cdi=f"{c}{pos_['CDI']}")
+            ws.write_formula(r, 1 + k, "=" + ff, F["num2b"] if fmt == "neg" else F[fmt])
 
     # histograma do PnL diário em % CDI (12M), colunas J:K
     f12 = fc.format(ini=ini["12M"])
@@ -503,7 +541,9 @@ def excel_formulas(xw, pos, cotas_ofic, cdi, datas, fundos_ok, F):
     base_dt = datas[-1]
     for cod in fundos_ok:                                                  # abas dos fundos primeiro
         hoje = pos[(pos.codigo_IAM_fundo == cod) & (pos.date == base_dt) & ~pos.categoria.isin(FORA)]
-        aba_fundo(wb, cod, FUNDOS[cod], ordena(hoje.categoria.unique()), sorted(hoje.setor_iam.dropna().unique()), F)
+        cinco = pos[(pos.codigo_IAM_fundo == cod) & pos.date.isin(datas[-EXCEL_DIAS:])]
+        extras = [c for c in ["Outros", "Hedge Bonds"] if (cinco.categoria == c).any()]   # entram no total e não são zerados
+        aba_fundo(wb, cod, FUNDOS[cod], ordena(hoje.categoria.unique()), sorted(hoje.setor_iam.dropna().unique()), F, extras)
     # cotas: cotas oficiais + (fundo, dia) que só existem na posição (ex.: D-1 ainda sem cota), na janela de 36M
     of = cotas_ofic[cotas_ofic.date.isin(datas)].groupby(["date", "codigo_IAM_fundo"]).fundo_pnl_perc.sum()
     chaves = pd.MultiIndex.from_frame(pos[pos.date.isin(datas)][["date", "codigo_IAM_fundo"]].drop_duplicates())
