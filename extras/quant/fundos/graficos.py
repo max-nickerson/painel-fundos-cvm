@@ -108,8 +108,7 @@ for i, v in enumerate(tab["nota"]):
     ax2.text(v + 1, i, f"{v:.0f}", va="center", fontsize=9)
 ax2.set_title("Nota (0-100)", loc="left", fontweight="bold", color=NAVY, pad=40)
 ax2.spines[["top", "right"]].set_visible(False)
-fig.text(.27, .02, "P(bater) = bootstrap estacionário do retorno ativo fora da amostra; PBO = prob. de overfitting (CSCV) entre as variantes;
-"
+fig.text(.27, .02, "P(bater) = bootstrap estacionário do retorno ativo fora da amostra; PBO = prob. de overfitting (CSCV) entre as variantes;\n"
          "Sharpe deflac. = prob. do IR verdadeiro > 0 dado o nº de variantes; custo x2 e execução +1 dia = retorno ativo OOS nesses cenários.",
          fontsize=9, color="#555")
 fig.savefig(OUT / "robustez_fundos.png", dpi=110)
