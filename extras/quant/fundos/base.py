@@ -52,6 +52,30 @@ def y(nome):
 IDX = y("idx")
 ETF = y("etf")
 FXY = y("fx")
+
+
+def _limpa_niveis(P, lim=.08, k_max=8):
+    """Erros de cotação do Yahoo que duram até k_max dias (COP jun/2015 = 26,2 em vez de 2.600; IDR 2013; NOK mar/2020; EURUSD dez/2008):
+    salto em log > lim desfeito em até k_max dias -> preços do intervalo viram NaN e são preenchidos com o último bom.
+    Desvalorizações de verdade (CHF jan/2015, TRY, ARS) não se desfazem e ficam."""
+    P = P.copy()
+    for c in P.columns:
+        v = P[c]
+        ok = v.dropna()
+        x = np.log(ok).diff().to_numpy()
+        ruim = np.zeros(len(x), bool)
+        for i in range(1, len(x)):
+            if np.isfinite(x[i]) and abs(x[i]) > lim and not ruim[i]:
+                for k in range(1, k_max + 1):
+                    if i + k < len(x) and abs(x[i] + x[i + 1:i + k + 1].sum()) < .15 * abs(x[i]):
+                        ruim[i:i + k] = True
+                        break
+        P.loc[ok.index[ruim], c] = np.nan
+        P[c] = P[c].where(P[c].notna() | v.isna()).ffill().where(v.notna() | P[c].notna())
+    return P
+
+
+FXY = _limpa_niveis(FXY)
 ADR = y("adr")
 BRL_LOC = y("br_local")
 DIAS_US = IDX["^GSPC"].dropna().index
@@ -63,14 +87,16 @@ BIS = pd.read_parquet(D / "bis_juros_politica.parquet").sort_index().ffill()
 
 
 def limpa(r, lim=.25):
-    """Retornos diários: zera saltos absurdos (erros de base / desdobramentos não ajustados)."""
-    return r.where(r.abs() < lim, 0.0)
+    """Retornos diários: zera saltos absurdos (erros de base / desdobramentos não ajustados). Mantém NaN (ativo ainda não listado)."""
+    return r.where((r.abs() < lim) | r.isna(), 0.0)
 
 
 def limpa_fx(r, lim=.04):
-    """Moedas: remove só erros de cotação (salto > lim que se desfaz no dia seguinte); mantém crises de verdade (ex.: lira turca)."""
-    vira = (r.abs() > lim) & ((r + r.shift(-1)).abs() < .3 * r.abs())
-    return r.where(~(vira | vira.shift(1, fill_value=False)), 0.0).where(r.abs() < .5, 0.0)
+    """Moedas: remove só erros de cotação (salto > lim que se desfaz no dia seguinte, medido em log, pega também erros de 100x);
+    mantém crises de verdade (lira turca 2021, peso argentino dez/2023 -54%)."""
+    l = np.log1p(r.clip(lower=-.999))
+    vira = (l.abs() > np.log1p(lim)) & ((l + l.shift(-1)).abs() < .3 * l.abs())
+    return r.where(~(vira | vira.shift(1, fill_value=False)) | r.isna(), 0.0)
 
 
 def brl(ex_us):

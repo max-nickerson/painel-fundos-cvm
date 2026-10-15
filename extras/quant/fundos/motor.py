@@ -27,8 +27,8 @@ class Fundo:
     estrutura: str
     func: Callable                                  # func(**params, custo_mult=1, lag=0) -> excesso diário sobre o CDI
     grade: dict = field(default_factory=dict)
-    adm: float = .015                               # taxa de gestão+administração a.a.
-    perf: float = .20                               # taxa de performance sobre o benchmark
+    adm: float = 0.0                                # fundo próprio: sem taxa de gestão
+    perf: float = 0.0                               # fundo próprio: sem taxa de performance
     despesas: float = .0015                         # custódia, auditoria, CVM, etc. a.a.
     inicio: str = "2012-01-01"
     corte: str = "2021-01-01"                       # início do fora da amostra

@@ -67,8 +67,9 @@ def carry_fx(n=3, filtro=1, lado="ls", alvo=.08, custo_mult=1, lag=0, teto=.25):
         mom = np.log(v) - np.log(v).shift(63)
         W = W.where(~((W > 0) & (mom < 0)), 0).where(~((W < 0) & (mom > 0)), 0)
     vol = spot.rolling(63, min_periods=40).std()
-    W = (W / vol).div((W / vol).abs().sum(axis=1).replace(0, np.nan), axis=0).fillna(0).clip(-teto, teto)   # teto por moeda: evita fundo de uma moeda só (TRY)
-    return _ex(mensal(W), R[W.columns], C_FX, lag, custo_mult, alvo)
+    W = (W / vol).div((W / vol).abs().sum(axis=1).replace(0, np.nan), axis=0).fillna(0)
+    W = mensal(vol_alvo(W, R[W.columns].fillna(0), alvo)).clip(-teto, teto)   # teto por moeda DEPOIS do vol-alvo (antes a TRY chegava a 75% do PL)
+    return _ex(W, R[W.columns], C_FX, lag, custo_mult, None)
 
 
 # ---------------------------------------------------------------- F12 commodities: tendência, momento relativo e posicionamento CFTC

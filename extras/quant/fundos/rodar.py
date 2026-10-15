@@ -37,7 +37,7 @@ acwi = (ETF["ACWI"].reindex(DIAS_US).ffill().pct_change(fill_method=None) - TB_U
 BENCH = {"CDI": CDI * 0, "Ibovespa": R_IBOV, "ACWI (R$ c/ hedge)": CDI + brl(acwi), "S&P 500 (R$ c/ hedge)": CDI + brl(SPX_USD - TB_US)}
 BENCH["CDI"] = CDI
 
-RF, MM, CR, AC = dict(adm=.005, perf=.20), dict(adm=.02, perf=.20), dict(adm=.008, perf=.20), dict(adm=.02, perf=.20)
+RF = MM = CR = AC = dict(adm=0.0, perf=0.0)                               # fundo próprio: só custos e despesas
 FUNDOS = [
     Fundo("01 Caixa sintético (box de 4 pontas)", "Arbitragem B3", "CDI",
           "Emprestar via box de opções quando a taxa travada supera o CDI", "Caixa em LFT; até 100% do PL em boxes de opções líquidas (BOVA11, PETR4, VALE3...) "
